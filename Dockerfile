@@ -1,48 +1,107 @@
-# Earth Information Jukebox: Sonification Backend
-# Python 3.12 with audio processing dependencies
-# Build with: docker build -t earth-jukebox-sonification .
-# Run with:   docker run -p 8000:8000 -v jukebox-data:/app/data earth-jukebox-sonification
+# Earth Information Jukebox: sonification backend (FastAPI + music engine + audio rendering)
+#
+# Build:  docker build -t earth-jukebox-sonification .
+#         docker build -t earth-jukebox-sonification --build-arg WITH_VSCO=1 .   # + real orchestral samples (~440 MB)
+# Run:    docker run -p 8000:8000 -v /path/to/datasets/data:/app/data:ro -v jukebox-cache:/app/cache earth-jukebox-sonification
+#         then  http://localhost:8000/docs   and   http://localhost:8000/api/health
+#
+# How the pieces fit (see the `deployment` repository):
+#   * the `datasets` image fills a volume with the team's RAW data (precipitation_2000_2026/, temperature_anomaly_1880_2025/),
+#     mounted READ-ONLY at /app/data;
+#   * at start-up backend/serve.py converts those folders, in the background, into the datasets the API serves and keeps
+#     them in the cache volume (/app/cache/_datasets). It is done once: later starts only rebuild what changed;
+#   * the API answers immediately; GET /api/health says "preparing_data": true until the datasets are ready.
 
-FROM python:3.12-slim AS production
+ARG PYTHON_VERSION=3.12
 
-# Install system dependencies for audio processing and scientific computing
-# - ffmpeg: audio encoding/decoding (MP3, WAV)
-# - libsndfile1: soundfile library dependency
-# - libnetcdf19: NetCDF file support for climate data
-# - curl: health checks
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg \
-    libsndfile1 \
-    libnetcdf19 \
-    curl \
+# ─────────────────────────────────────────────────────────────
+# Stage 1: Python packages that may need a compiler
+# tinysoundfont has a ready-made wheel for x86_64 only; on arm64 it is compiled here, so the final image needs no gcc
+# ─────────────────────────────────────────────────────────────
+FROM python:${PYTHON_VERSION}-slim AS wheels
+
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# --no-deps: tinysoundfont lists pyaudio (live playback), which the server does not need
+RUN pip wheel --no-cache-dir --no-deps --wheel-dir /wheels tinysoundfont
+
+# ─────────────────────────────────────────────────────────────
+# Stage 2: the sounds (needs git; only the files reach the final image)
+# - GeneralUser GS SoundFont (~32 MB): always, otherwise there is no audio
+# - VSCO 2 CE orchestral samples (~440 MB, CC0): only with --build-arg WITH_VSCO=1
+# The project's own scripts do the download, so the image gets exactly what the code expects.
+# ─────────────────────────────────────────────────────────────
+FROM python:${PYTHON_VERSION}-slim AS sounds
+
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates libsndfile1 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+RUN pip install --no-cache-dir numpy soundfile
+COPY music/ music/
+COPY soundfonts/ soundfonts/
+
+RUN python music/render_audio.py --download \
+    && test -s soundfonts/GeneralUser-GS.sf2
+
+ARG WITH_VSCO=0
+RUN if [ "$WITH_VSCO" = "1" ]; then \
+        python music/sampler.py --download \
+        && python -c "import sys; sys.path.insert(0, 'music'); import sampler; sys.exit(0 if sampler.vsco_available() else 1)" \
+        && rm -rf soundfonts/vsco/.git; \
+    fi
+
+# ─────────────────────────────────────────────────────────────
+# Stage 3: the image that is deployed
+# ─────────────────────────────────────────────────────────────
+FROM python:${PYTHON_VERSION}-slim AS production
+
+# - ffmpeg: MP3 encoding          - libsndfile1: needed by the soundfile package
+# - curl: container health check
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg libsndfile1 curl \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Copy requirements first for better layer caching
+# Python dependencies first, for better layer caching
 COPY requirements.txt .
+COPY --from=wheels /wheels /wheels
+RUN pip install --no-cache-dir -r requirements.txt \
+    && pip install --no-cache-dir --no-deps /wheels/*.whl \
+    && rm -rf /wheels
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy application code
+# Application code (.dockerignore keeps the examples, caches and local data out)
 COPY . .
 
-# Environment configuration (can be overridden at runtime)
-ENV JUKEBOX_DATA_DIR=/app/data
-ENV JUKEBOX_CACHE_DIR=/app/cache
-ENV JUKEBOX_CORS=*
+# Sounds from stage 2
+COPY --from=sounds /app/soundfonts/ soundfonts/
 
-# Create directories for data and cache
+# Configuration (can be overridden at run time; the deployment's docker-compose sets the same values)
+#   JUKEBOX_DATA_DIR  : the team's raw folders and/or ready-made <prefix>_<variable>.npz + .json (may be read-only)
+#   JUKEBOX_CACHE_DIR : compositions + the converted datasets (must be writable; a volume keeps them between restarts)
+#   JUKEBOX_PREPARE   : 0 = do not convert raw data at start-up
+ENV JUKEBOX_DATA_DIR=/app/data \
+    JUKEBOX_CACHE_DIR=/app/cache \
+    JUKEBOX_CORS=* \
+    JUKEBOX_PREPARE=1 \
+    PORT=8000 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
 RUN mkdir -p /app/data /app/cache
 
-# Expose API port
+# Fail the build, not the deployment, if the image cannot make music or convert data
+RUN python -c "import tinysoundfont, soundfile, fastapi, uvicorn, numpy; import shutil, sys; sys.exit(0 if shutil.which('ffmpeg') else 1)" \
+    && test -s soundfonts/GeneralUser-GS.sf2 \
+    && test -s simulation/land_mask_025deg.npz \
+    && python simulation/build_monthly_dataset.py --help > /dev/null
+
 EXPOSE 8000
 
-# Health check for container orchestration
-HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:8000/api/health || exit 1
+# The API answers as soon as the server is up, also while the data is still being converted
+HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
+    CMD curl -fsS "http://localhost:${PORT}/api/health" || exit 1
 
-# Run uvicorn server
-# The app is at backend/app.py, module path is backend.app:app
-CMD ["uvicorn", "backend.app:app", "--host", "0.0.0.0", "--port", "8000"]
+# Converts the raw data in the background, then serves backend.app:app with uvicorn
+CMD ["python", "backend/serve.py"]

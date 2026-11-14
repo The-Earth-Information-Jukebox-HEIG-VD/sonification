@@ -56,10 +56,20 @@ docker-compose*
 *.npy
 data/
 simulation/output/
+simulation/raw/
+# ... except the land mask: the dataset converter needs it inside the image
+!simulation/land_mask_025deg.npz
+
+# Example pieces and previews (about 130 MB of MP3/PNG/GIF, not used by the server)
+music/examples/
+music/output/
+simulation/preview/
 
 # Cache directory (will be created at runtime)
 backend/cache/
 
-# Soundfonts are large - consider a separate image or download
-# Uncomment if soundfonts should not be in the image:
-# soundfonts/
+# Sounds are downloaded inside the image build (Dockerfile, stage "sounds"), so local copies stay out:
+# the image is the same whoever builds it, and the build context stays small
+soundfonts/*.sf2
+soundfonts/_gugs/
+soundfonts/vsco/

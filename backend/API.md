@@ -19,12 +19,13 @@ uvicorn backend.app:app --reload --port 8000
 |---|---|---|
 | `JUKEBOX_DATA_DIR` | `simulation/output` | folder with the intensity maps (`<dataset>_<variable>.npz` + `.json`, see `simulation/INTENSITY_MAP_SPEC.md`). When the real extraction is ready, point this at its output folder: nothing else changes. |
 | `JUKEBOX_CACHE_DIR` | `backend/cache` | generated compositions (safe to delete) |
+| `JUKEBOX_BUILT_DIR` | `<cache>/_datasets` | datasets converted from the team's raw folders by `backend/prepare_data.py`; scanned in addition to `JUKEBOX_DATA_DIR`. In the Docker image this happens by itself at start-up (see the README) |
 | `JUKEBOX_CORS` | `*` | allowed origins, comma-separated |
 
 ## Endpoints
 | method | path | what |
 |---|---|---|
-| GET | `/api/health` | status, number of datasets, whether audio/MP3 rendering is available |
+| GET | `/api/health` | status, number of datasets, whether audio/MP3 rendering is available, and `preparing_data` (true while the server is still converting raw data at start-up: datasets can still be missing) |
 | GET | `/api/options` | everything the UI needs for its menus: zones (with bbox), palettes, keys, scales, the orchestra (which instrument plays which variable), default request |
 | GET | `/api/instruments` | **which instrument plays which dataset**: one row per dataset with `dataset_id` (what `/api/sonify` accepts), `label`, `instrument`, `role`, `units`, `always_playing`, plus `by_dataset`, a plain `{dataset_id: instrument}` map. `?palette=auto&zone=japan` gives the regional instruments |
 | GET | `/api/datasets` | available datasets: id, variables (units, range, instrument), number of frames, time range |

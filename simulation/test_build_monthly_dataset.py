@@ -121,3 +121,35 @@ def test_monthly_npy_precipitation_and_co2(tmp_path):
     assert np.allclose(c["data"][0, 1:45], 400) and np.allclose(c["data"][0, 45:89], 380)
     assert np.allclose(c["data"][0, 0], 400) and np.allclose(c["data"][0, 89], 380)   # half-covered polar rows
     assert json.loads((out / "team_co2.json").read_text())["vmin"] == 365
+
+
+def fake_precip_monthly(folder: Path, months: list[str]):
+    """The datasets repository's layout: precipitation_<YYYY>_<MM>.npy, 720 x 1440 float16, mm/h.
+    1 mm/h north of the equator (+ 0.1 per month number), 0 south of it, like fake_year()."""
+    for m in months:
+        a = np.zeros((720, 1440), np.float16)
+        a[:360] = 1.0 + 0.1 * int(m[5:7])
+        np.save(folder / f"precipitation_{m.replace('-', '_')}.npy", a)
+
+
+def test_precipitation_one_file_per_month(tmp_path):
+    """Same data in the two layouts (one .npz per year / one .npy per month) gives the same dataset."""
+    yearly, monthly, out = tmp_path / "yearly", tmp_path / "monthly", tmp_path / "out"
+    yearly.mkdir(), monthly.mkdir()
+    fake_year(yearly, 2000, [11, 12])
+    fake_year(yearly, 2001, [1, 2, 3])
+    fake_precip_monthly(monthly, ["2000-11", "2000-12", "2001-01", "2001-02", "2001-03"])
+    assert run("--precip", yearly, "--out", out / "y", "--res", 2).returncode == 0
+    r = run("--precip", monthly, "--out", out / "m", "--res", 2)
+    assert r.returncode == 0, r.stderr
+    y = np.load(out / "y" / "real_monthly_2000_2001_precipitation.npz")
+    m = np.load(out / "m" / "real_monthly_2000_2001_precipitation.npz")
+    assert list(y["time"]) == list(m["time"]) and m["data"].shape == (5, 90, 180)
+    assert np.allclose(y["data"], m["data"], rtol=1e-4, atol=1e-4)
+    assert np.allclose(m["data"][0, :45], (1.0 + 0.1 * 11) * 24, rtol=1e-3)          # mm/h -> mm/day
+    meta = json.loads((out / "m" / "real_monthly_2000_2001_precipitation.json").read_text())
+    assert meta["units"] == "mm/day" and meta["real"] is True
+    # an empty folder is refused with both layouts named
+    (tmp_path / "empty").mkdir()
+    r = run("--precip", tmp_path / "empty", "--out", out / "e")
+    assert r.returncode != 0 and "precipitation_monthly_*.npz" in (r.stderr + r.stdout)

@@ -12,6 +12,7 @@ Docs:  http://localhost:8000/docs  (interactive OpenAPI)
 Config (environment variables):
   JUKEBOX_DATA_DIR    folder with intensity maps (*.npz + *.json)   default: simulation/output
   JUKEBOX_CACHE_DIR   where compositions are written / cached        default: backend/cache
+  JUKEBOX_BUILT_DIR   datasets built by backend/prepare_data.py      default: <cache>/_datasets
   JUKEBOX_CORS        comma-separated allowed origins                default: *
 """
 from __future__ import annotations
@@ -40,8 +41,11 @@ from zone_to_midi import ZONES  # noqa: E402
 
 DATA_DIR = Path(os.environ.get("JUKEBOX_DATA_DIR", ROOT / "simulation" / "output"))
 CACHE_DIR = Path(os.environ.get("JUKEBOX_CACHE_DIR", ROOT / "backend" / "cache"))
+# datasets converted from the team's raw folders by backend/prepare_data.py (the data folder can be read-only)
+BUILT_DIR = Path(os.environ.get("JUKEBOX_BUILT_DIR") or CACHE_DIR / "_datasets")
 CORS = [o.strip() for o in os.environ.get("JUKEBOX_CORS", "*").split(",")]
 API_VERSION = "1.8"
+COMPOSITION_ID = re.compile(r"[0-9a-f]{16}")         # what cache_key() produces
 
 app = FastAPI(title="Earth Information Jukebox: sonification API", version=API_VERSION,
               description="Turns NASA EIC intensity maps into an orchestra (MIDI + audio).")
@@ -55,7 +59,7 @@ _datasets_cache: dict = {"mtime": None, "data": {}}
 
 
 def scan_datasets() -> dict:
-    files = sorted(DATA_DIR.glob("*.npz")) if DATA_DIR.exists() else []
+    files = [f for d in dict.fromkeys((DATA_DIR, BUILT_DIR)) if d.exists() for f in sorted(d.glob("*.npz"))]
     stamp = tuple((f.name, f.stat().st_mtime) for f in files)
     if _datasets_cache["mtime"] == stamp:
         return _datasets_cache["data"]
@@ -295,6 +299,7 @@ def health():
     import shutil
     import sampler
     return {"status": "ok", "version": API_VERSION, "datasets": len(ds), "data_dir": str(DATA_DIR),
+            "built_dir": str(BUILT_DIR), "preparing_data": (BUILT_DIR / ".preparing").exists(),
             "audio_rendering": audio_ok, "mp3_encoding": bool(shutil.which("ffmpeg")),
             "orchestral_samples": sampler.vsco_available()}
 
@@ -504,13 +509,15 @@ def sonify(req: SonifyRequest, request: Request):
 
 @app.get("/api/compositions/{comp_id}")
 def get_composition(comp_id: str, request: Request, include_notes: bool = True):
-    if not (CACHE_DIR / comp_id / "score.json").exists() or "/" in comp_id or ".." in comp_id:
+    if not COMPOSITION_ID.fullmatch(comp_id) or not (CACHE_DIR / comp_id / "score.json").exists():
         raise HTTPException(404, "composition not found")
     return build_response(request, comp_id, include_notes, True, 0.0)
 
 
 @app.get("/api/files/{comp_id}/{file_path:path}", name="get_file")
 def get_file(comp_id: str, file_path: str):
+    if not COMPOSITION_ID.fullmatch(comp_id):          # only compositions, nothing else kept in the cache folder
+        raise HTTPException(404, "file not found")
     base = (CACHE_DIR / comp_id).resolve()
     target = (base / file_path).resolve()
     if base not in target.parents or not target.is_file():
