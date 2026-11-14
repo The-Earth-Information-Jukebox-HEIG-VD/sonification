@@ -290,3 +290,27 @@ def test_yearly_maps_are_held_for_their_twelve_months(tmp_path):
     r = run("--nightlights", src, "--out", out, "--res", 2, "--prefix", "gap")
     assert r.returncode != 0 and "2012 -> 2014" in (r.stderr + r.stdout)
 
+
+def fake_fires(folder: Path, months: list[str]):
+    """fires_<YYYY>_<MM>.npy like the team's: 720 x 1440 float16, days of the month with a fire (0-31).
+    A burning belt between the equator and 10N: 12 days, + 1 per month; nothing elsewhere."""
+    for i, m in enumerate(months):
+        a = np.zeros((720, 1440), np.float16)
+        a[320:360] = 12 + i
+        np.save(folder / f"fires_{m.replace('-', '_')}.npy", a)
+
+
+def test_fires(tmp_path):
+    src, out = tmp_path / "f", tmp_path / "out"
+    src.mkdir()
+    fake_fires(src, ["2002-07", "2002-08"])
+    r = run("--fires", src, "--out", out, "--res", 2)
+    assert r.returncode == 0, r.stderr
+    z = np.load(out / "real_monthly_2002_2002_fires.npz")
+    meta = json.loads((out / "real_monthly_2002_2002_fires.json").read_text())
+    lat = z["lat"]
+    belt = (lat > 0) & (lat < 10)
+    assert np.allclose(z["data"][0][belt], 12) and np.allclose(z["data"][1][belt], 13) and np.all(z["data"][0][~belt] == 0)
+    assert meta["variable"] == "fires" and meta["units"] == "fire days per month" and meta["vmax"] == 8 and meta["real"] is True
+    assert np.allclose(z["intensity"][0][belt], 1.0)                 # 12 days is far above the top of the range
+

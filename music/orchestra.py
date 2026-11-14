@@ -76,6 +76,10 @@ ORCHESTRA = {
                                 restrike=True),   # sounds an octave higher; percussive -> re-struck every beat
     "lightning":           dict(name="Lightning - Xylophone", role="timpani", program=13, channel=4,
                                 low=77, high=101, gain=3.0, gate=0.08, levels=[0.35, 0.60, 0.85], level=0.75, pan=104),
+    # fires (days of the month with a fire): trombones, a darker brass than the smoke's horns. A first choice,
+    # made when the fires data arrived: change the instrument and its numbers here.
+    "fires":               dict(name="Fires - Trombones (melody)", role="melody", program=57, channel=8,
+                                low=48, high=69, gain=3.0, gate=0.08, levels=[0.45, 0.75], level=0.85, pan=88),
     # yearly data (one value per year, held for its 12 months): a plucked harp, brighter = higher. A first choice,
     # made when the night-lights data arrived: change the instrument and its numbers here.
     "nightlights":         dict(name="Night lights - Harp (melody)", role="melody", program=46, channel=7,

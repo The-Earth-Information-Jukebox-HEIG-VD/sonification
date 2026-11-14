@@ -8,6 +8,7 @@ In the deployment the `datasets` image fills a read-only volume with the extract
                                                                       precipitation_monthly_<YYYY>.npz)
     <raw>/precipitation_snow_2000_2026/snow_<YYYY>_<MM>.npy
     <raw>/nightlights_2012_2023/nightlights_<YYYY>.npy               (one map per year)
+    <raw>/fires_2002_2026/fires_<YYYY>_<MM>.npy
     <raw>/temperature_anomaly_1880_2025/temperature_anomaly_<YYYY>_<MM>.npy
     <raw>/lightning_2017_2023/lightning_<YYYY>_<MM>.npy
     <raw>/co2_2002_2022/co2_<YYYY>_<MM>.npy
@@ -48,6 +49,7 @@ INPUTS = {
     # rain only (since the team split precipitation into rain and snow), the former total, or the yearly .npz
     "precip": [f"rain_{MONTH}.npy", f"precipitation_{MONTH}.npy", "precipitation_monthly_*.npz"],
     "snow": [f"snow_{MONTH}.npy"],
+    "fires": [f"fires_{MONTH}.npy"],
     "nightlights": ["nightlights_[0-9][0-9][0-9][0-9].npy"],                      # one file per YEAR
     "temperature": [f"temperature_anomaly_{MONTH}.npy"],
     "lightning": [f"lightning_{MONTH}.npy"],
@@ -74,6 +76,7 @@ RECIPES = [
     # the converter removes the outline of the source picture that is still in the delivered CO2 values
     dict(name="co2", prefix="real_co2", needs=["co2"], args=["--res", "1"]),
     dict(name="snow", prefix="real_snow", needs=["snow"], args=["--res", "1"]),
+    dict(name="fires", prefix="real_fires", needs=["fires"], args=["--res", "1"]),
     # yearly maps: the converter repeats each one for the 12 months of its year
     dict(name="night lights", prefix="real_nightlights", needs=["nightlights"], args=["--res", "1"]),
 ]

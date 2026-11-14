@@ -269,6 +269,9 @@ All fields are optional. The smallest request is `{}` (global zone, default data
 
 ```
 
+### New in v2.2 (fires)
+- new variable from the team's data: **fires** (`fires`, trombones): the average number of days per month with at least one fire detected, July 2002 to November 2026. `wildfires` is accepted as another name.
+
 ### New in v2.1 (rain, snow, yearly night lights; the webapp's own path)
 - new variables from the team's data: **snow** (`snow`, glockenspiel; mm/day of melted water) and **night lights** (`night_lights`, harp; brightness 0–1, **yearly**: one value per year, held for its 12 months). `precipitation` is now the rain alone.
 - `POST /api/zones/zone-data`: the same call as `/api/sonify` under the path and field names of the webapp's code (`dataset_ids` in; `dataset_ids` and `values` out). Datasets without data on the server are left out, not an error.

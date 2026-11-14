@@ -11,7 +11,8 @@ Two calls. No options.
 {
   "palette": "orchestra",
   "by_dataset": {"temperature": "Piano (chords)", "co2": "Contrabass", "precipitation": "Violins (melody)",
-                 "snow": "Glockenspiel (melody)", "lightning": "Xylophone", "night_lights": "Harp (melody)"},
+                 "snow": "Glockenspiel (melody)", "fires": "Trombones (melody)", "lightning": "Xylophone",
+                 "night_lights": "Harp (melody)"},
   "instruments": [
     {"dataset_id": "temperature", "name": "Temperature", "instrument": "Piano (chords)", "units": "degC anomaly",
      "first_time_period": "1880-01", "last_time_period": "2025-12",
@@ -28,10 +29,11 @@ One entry per dataset the server has data for:
 | `co2` | Contrabass | ppm | 2002-09 → 2022-03 |
 | `precipitation` | Violins (melody) | mm/day of rain | 2000-06 → 2026-11 |
 | `snow` | Glockenspiel (melody) | mm/day of melted water | 2000-06 → 2026-11 |
+| `fires` | Trombones (melody) | days of the month with a fire | 2002-07 → 2026-11 |
 | `lightning` | Xylophone | share of the area with lightning (0–1) | 2017-03 → 2023-07 |
 | `night_lights` | Harp (melody) | brightness (0–1) | 2012-01 → 2023-12, one value per year |
 
-`dataset_id` is what you send below. `co2_atmosphere` is also accepted for `co2`. The webapp's other tracks (`co2_emissions`, `wildfires`, `antarctica_melt`, `ecosystem`, `deforestation`) have no data yet.
+`dataset_id` is what you send below, and it is the file prefix of the dataset's folder in the data volume (`fires`, `co2`, `lightning`) wherever the two can match. Also accepted: `co2_atmosphere` for `co2`, `wildfires` for `fires`, `rain` for `precipitation`, `snowfall` for `snow`, `nightlights` for `night_lights`.
 
 ## 2. Points + a time period in, music out
 

@@ -46,6 +46,7 @@ The image is self-contained for audio: `tinysoundfont`, `ffmpeg` and the General
 /app/data/precipitation_rain_2000_2026/rain_<YYYY>_<MM>.npy              (one file per month, mm/h)
 /app/data/precipitation_snow_2000_2026/snow_<YYYY>_<MM>.npy              (one file per month, mm/h of melted water)
 /app/data/nightlights_2012_2023/nightlights_<YYYY>.npy                   (ONE FILE PER YEAR, brightness 0-1)
+/app/data/fires_2002_2026/fires_<YYYY>_<MM>.npy                          (days of the month with a fire, 0-31)
 /app/data/temperature_anomaly_1880_2025/temperature_anomaly_<YYYY>_<MM>.npy
 /app/data/lightning_2017_2023/lightning_<YYYY>_<MM>.npy                  (share of each pixel with lightning, 0-1)
 /app/data/co2_2002_2022/co2_<YYYY>_<MM>.npy                              (ppm)
@@ -57,6 +58,7 @@ At start-up `backend/serve.py` runs `backend/prepare_data.py` in the background.
 | `real_temperature_1880_2025` | temperature anomaly, every month since 1880, 2° |
 | `real_precipitation_2000_2026` | rain, June 2000 → November 2026, 1° |
 | `real_snow_2000_2026` | snow (melted water), June 2000 → November 2026, 1° |
+| `real_fires_2002_2026` | fires, July 2002 → November 2026, 1°: days of the month with at least one fire |
 | `real_nightlights_2012_2023` | night lights, 2012 → 2023, 1°; one map per year, repeated for its 12 months |
 | `real_lightning_2017_2023` | lightning activity, March 2017 → July 2023, 1°, 55°S–55°N |
 | `real_co2_2002_2022` | CO₂, September 2002 → March 2022, 1°, outline pixels removed (see below) |

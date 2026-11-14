@@ -16,6 +16,8 @@ Input  (from the data-extraction side, monthly, on the team's 0.25 deg common gr
         [720,1440] float16, mm/h: the team's precipitation split into rain and snow (melted water)
     nightlights_<YYYY>.npy                      (--nightlights DIR, ONE FILE PER YEAR, 2012 -> 2023)
         [720,1440] float32, brightness 0-1. Repeated for the 12 months of its year (monthly time axis)
+    fires_<YYYY>_<MM>.npy                       (--fires DIR, one file per month, 2002-07 ->)
+        [720,1440] float16, days of the month with at least one fire detected (0-31)
     lightning_<YYYY>_<MM>.npy                   (--lightning DIR, one file per month, 2017-03 -> 2023-07)
         [720,1440] float16, share of the pixel with lightning (0-1), observed between 55S and 55N only
     co2_<YYYY>_<MM>.npy                         (--co2 DIR, one file per month, 2002-09 -> 2022-03)
@@ -31,6 +33,7 @@ Output (one monthly time axis, one frame = one bar):
       co2                   REAL  ppm, vmin/vmax 365..435 (the range of the delivered files)
       lightning             REAL  share of area with lightning (0-1), vmin/vmax 0..0.4, NaN beyond 55 deg
       snowfall              REAL  mm/day of melted water (snow_mmh * 24), vmin/vmax 0..3
+      fires                 REAL  fire days per month (mean over the area), vmin/vmax 0..8
       nightlights           REAL  brightness 0-1, vmin/vmax 0..0.1, one value per year held for 12 months
       surface_temperature   REAL  temperature ANOMALY in degC (meta "anomaly": true), played by the piano like the
                                   temperature of the other datasets; vmin/vmax -5..+5 instead of -40..+40.
@@ -116,8 +119,15 @@ SOURCES["nightlights"] = dict(pattern="nightlights_*.npy", reader="yearly_npy", 
                               units="brightness (0-1)", vmin=0.0, vmax=0.1,
                               source="NASA Earth at Night (SVS 5276), yearly map of night-time lights, brightness "
                                      "0-1, extracted by the team (REAL); each yearly map is repeated for its 12 months")
+# number of days of the month with at least one fire detected in the pixel (0-31). Over a region the monthly
+# mean is about 0.2 (quiet) to 7 (West Africa or the Amazon arc in their burning season), hence vmax 8.
+SOURCES["fires"] = dict(pattern="fires_*_*.npy", reader="monthly_npy", factor=1.0,
+                        units="fire days per month", vmin=0.0, vmax=8.0,
+                        source="NASA MODIS active fires (Terra + Aqua, GIBS layer MODIS_Combined_Thermal_Anomalies_All), "
+                               "days of the month with at least one fire per 0.25 deg pixel, extracted by the team (REAL)")
 INPUT_ARGS = {"precipitation": "precip", "surface_temperature": "temperature", "co2": "co2",
-              "lightning": "lightning", "snowfall": "snow", "nightlights": "nightlights"}   # variable -> option
+              "lightning": "lightning", "snowfall": "snow", "nightlights": "nightlights",
+              "fires": "fires"}                                                            # variable -> option
 
 
 def block_mean(stack: np.ndarray, f: int, area: np.ndarray) -> np.ndarray:
@@ -267,6 +277,7 @@ def main():
     ap.add_argument("--co2", help="folder with co2_<YYYY>_<MM>.npy")
     ap.add_argument("--lightning", help="folder with lightning_<YYYY>_<MM>.npy (share of each pixel with lightning, 0-1)")
     ap.add_argument("--snow", help="folder with snow_<YYYY>_<MM>.npy (mm/h of melted water)")
+    ap.add_argument("--fires", help="folder with fires_<YYYY>_<MM>.npy (days of the month with a fire, 0-31)")
     ap.add_argument("--nightlights", help="folder with nightlights_<YYYY>.npy, ONE MAP PER YEAR (brightness 0-1); "
                                           "each map is repeated for the 12 months of its year")
     ap.add_argument("--res", type=float, default=1.0, choices=[0.25, 0.5, 1.0, 2.0], help="output grid in degrees")

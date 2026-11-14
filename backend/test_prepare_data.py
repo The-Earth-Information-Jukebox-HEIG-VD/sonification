@@ -13,8 +13,8 @@ import numpy as np
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "simulation"))
 sys.path.insert(0, str(ROOT / "music"))
-from test_build_monthly_dataset import (fake_co2, fake_lightning, fake_nightlights, fake_precip_monthly,  # noqa: E402
-                                         fake_split_precipitation, fake_temperature, fake_year)
+from test_build_monthly_dataset import (fake_co2, fake_fires, fake_lightning, fake_nightlights,  # noqa: E402
+                                         fake_precip_monthly, fake_split_precipitation, fake_temperature, fake_year)
 
 
 def prepare(raw, out, *extra):
@@ -356,4 +356,42 @@ def test_chunks_of_one_series_use_the_same_pitch_scale(tmp_path):
     low, mid, high = notes("2012-03", "series"), notes("2013-03", "series"), notes("2014-03", "series")
     assert len(low) == len(mid) == len(high) == 1 and low[0] < mid[0] < high[0]        # brighter year = higher note
     assert notes("2012-03", "window") == notes("2014-03", "window")                    # scaled on the piece: no difference
+
+
+FIRES_CHECK = """
+import json
+from fastapi.testclient import TestClient
+from backend.app import app
+c = TestClient(app)
+pts = [{"lat": 5.0, "lng": 20.0, "x": 1, "y": 2}, {"lat": 6.0, "lng": 21.0, "x": 3, "y": 4}]
+def zone(ids):
+    r = c.post("/api/zones/zone-data", json={"zone_id": "z", "zone_name": "Z", "dataset_ids": ids, "points": pts,
+                                             "time_period": "2002-07", "aggregation": "mean"})
+    j = r.json(); j.pop("audio_data", None)
+    return {"status": r.status_code, **j}
+print(json.dumps({"instruments": c.get("/api/instruments").json(), "fires": zone(["fires"]), "wildfires": zone(["wildfires"])}))
+"""
+
+
+def test_fires_from_the_data_step_to_the_webapp_call(tmp_path):
+    raw, cache = tmp_path / "data", tmp_path / "cache"
+    (raw / "fires_2002_2026").mkdir(parents=True)
+    fake_fires(raw / "fires_2002_2026", ["2002-07", "2002-08", "2002-09"])
+    assert "1 dataset(s) built" in prepare(raw, cache / "_datasets")
+    assert (cache / "_datasets" / "real_fires_2002_2002_fires.npz").exists()
+    env = {**os.environ, "JUKEBOX_DATA_DIR": str(raw), "JUKEBOX_CACHE_DIR": str(cache), "JUKEBOX_MERGE_DATASETS": "1",
+           "JUKEBOX_FULL_API": "0", "JUKEBOX_CHUNK_SECONDS": "6"}
+    env.pop("JUKEBOX_BUILT_DIR", None)
+    r = subprocess.run([sys.executable, "-c", FIRES_CHECK], cwd=str(ROOT), env=env, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr[-2000:]
+    res = json.loads(r.stdout.strip().splitlines()[-1])
+    row = res["instruments"]["instruments"][0]
+    # the id is the folder's prefix, which is how the webapp links a track to its globe layer
+    assert row["dataset_id"] == "fires" and "Trombones" in row["instrument"] and row["units"] == "fire days per month"
+    assert row["first_time_period"] == "2002-07" and row["last_time_period"] == "2002-09"
+    f = res["fires"]
+    assert f["status"] == 200 and f["dataset_ids"] == ["fires"] and abs(f["values"]["fires"] - 12) < 0.01
+    assert f["time_period"] == "2002-07" and f["next_time_period"] == "2002-09"
+    w = res["wildfires"]                                       # the webapp's earlier name for the same data
+    assert w["status"] == 200 and w["dataset_ids"] == ["wildfires"] and abs(w["values"]["wildfires"] - 12) < 0.01
 
