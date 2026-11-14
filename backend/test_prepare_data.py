@@ -13,8 +13,8 @@ import numpy as np
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "simulation"))
 sys.path.insert(0, str(ROOT / "music"))
-from test_build_monthly_dataset import (fake_co2, fake_lightning, fake_precip_monthly, fake_temperature,  # noqa: E402
-                                         fake_year)
+from test_build_monthly_dataset import (fake_co2, fake_lightning, fake_nightlights, fake_precip_monthly,  # noqa: E402
+                                         fake_split_precipitation, fake_temperature, fake_year)
 
 
 def prepare(raw, out, *extra):
@@ -250,11 +250,110 @@ def test_deployed_api_is_only_what_the_frontend_uses(tmp_path):
     raw, cache = raw_like_the_datasets_repo(tmp_path), tmp_path / "cache"
     prepare(raw, cache / "_datasets")
     res = run_api(raw, cache, JUKEBOX_MERGE_DATASETS="1", JUKEBOX_FULL_API="0")
-    assert res["paths"] == ["/api/health", "/api/instruments", "/api/sonify"] and res["health"]["full_api"] is False
+    assert res["paths"] == ["/api/health", "/api/instruments", "/api/sonify", "/api/zones/zone-data"]
+    assert res["health"]["full_api"] is False
     assert res["compose_status"] == 404 and res["precip"]["status"] == 404          # no engine or debug endpoints
     # the frontend's call works and answers with exactly its seven fields; 30 s from 2001-01 = the 3 months left
     assert res["public"]["status"] == 200 and res["public"]["audio"] > 10000 and res["public"]["next"] is None
     assert res["public"]["keys"] == ["zone_id", "dataset_id", "time_period", "next_time_period", "audio_data", "value",
                                      "point_count"]
     assert res["ranges"] == {"temperature": ["2000-12", "2001-04"], "precipitation": ["2000-11", "2001-03"]}
+
+
+def test_rain_snow_and_yearly_night_lights_in_the_data_step(tmp_path):
+    """The datasets repo after the split of precipitation: rain and snow folders, and one night-lights map per year."""
+    raw, out = tmp_path / "data", tmp_path / "built"
+    for name in ("precipitation_rain_2000_2026", "precipitation_snow_2000_2026", "nightlights_2012_2023"):
+        (raw / name).mkdir(parents=True)
+    fake_split_precipitation(raw / "precipitation_rain_2000_2026", raw / "precipitation_snow_2000_2026",
+                             ["2012-11", "2012-12", "2013-01"])
+    fake_nightlights(raw / "nightlights_2012_2023", [2012, 2013])
+    log = prepare(raw, out)
+    assert "3 dataset(s) built" in log
+    names = sorted(p.name for p in out.glob("*.npz"))
+    assert names == ["real_nightlights_2012_2013_nightlights.npz", "real_precipitation_2012_2013_precipitation.npz",
+                     "real_snow_2012_2013_snowfall.npz"]
+    z = np.load(out / "real_nightlights_2012_2013_nightlights.npz")
+    assert z["data"].shape[0] == 24                                      # 2 yearly maps -> 24 months
+
+
+WEBAPP_CHECK = """
+import json
+from fastapi.testclient import TestClient
+from backend.app import app
+c = TestClient(app)
+pts = [{"lat": 46.5, "lng": 6.6, "x": 1, "y": 2}, {"lat": 60.0, "lng": 10.0, "x": 3, "y": 4}]
+def zone(ids, period):
+    r = c.post("/api/zones/zone-data", json={"zone_id": "z", "zone_name": "Z", "dataset_ids": ids, "points": pts,
+                                             "time_period": period, "aggregation": "mean"})
+    j = r.json()
+    if "audio_data" in j:
+        j["audio_data"] = len(j["audio_data"] or "")
+    return {"status": r.status_code, **j}
+inst = c.get("/api/instruments").json()
+print(json.dumps({
+    "instruments": inst,
+    "lights_2012": zone(["night_lights"], "2012-11"),
+    "lights_2013": zone(["night_lights"], "2013-01"),
+    "mix": zone(["night_lights", "wildfires", "snow", "precipitation"], "2012-11"),
+    "nothing": zone(["wildfires", "deforestation"], "2012-11"),
+    "paths": sorted(p for p in c.get("/openapi.json").json()["paths"] if p.startswith("/api/")),
+}))
+"""
+
+
+def test_the_webapp_endpoint_and_ids(tmp_path):
+    """POST /api/zones/zone-data, as webapp/src/services/zoneApi.ts calls it: dataset_ids in, dataset_ids + values out."""
+    raw, cache = tmp_path / "data", tmp_path / "cache"
+    for name in ("precipitation_rain_2000_2026", "precipitation_snow_2000_2026", "nightlights_2012_2023"):
+        (raw / name).mkdir(parents=True)
+    fake_split_precipitation(raw / "precipitation_rain_2000_2026", raw / "precipitation_snow_2000_2026",
+                             ["2012-11", "2012-12", "2013-01"])
+    fake_nightlights(raw / "nightlights_2012_2023", [2012, 2013])
+    prepare(raw, cache / "_datasets")
+    env = {**os.environ, "JUKEBOX_DATA_DIR": str(raw), "JUKEBOX_CACHE_DIR": str(cache), "JUKEBOX_MERGE_DATASETS": "1",
+           "JUKEBOX_FULL_API": "0", "JUKEBOX_CHUNK_SECONDS": "6"}
+    env.pop("JUKEBOX_BUILT_DIR", None)
+    r = subprocess.run([sys.executable, "-c", WEBAPP_CHECK], cwd=str(ROOT), env=env, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr[-2000:]
+    res = json.loads(r.stdout.strip().splitlines()[-1])
+    assert "/api/zones/zone-data" in res["paths"] and "/api/compose" not in res["paths"]
+    # GET /api/instruments: the fields the webapp's TypeScript declares, with its own id for the night lights
+    inst = res["instruments"]
+    assert inst["palette"] == "orchestra" and set(inst["by_dataset"]) == {"precipitation", "snow", "night_lights"}
+    row = next(x for x in inst["instruments"] if x["dataset_id"] == "night_lights")
+    assert {"instrument", "midi_program", "pitch_range", "role", "always_playing"} <= set(row)
+    assert row["first_time_period"] == "2012-01" and row["last_time_period"] == "2013-12" and len(row["pitch_range"]) == 2
+    # one yearly dataset: exactly the fields of ZoneDataResponse; the value is the year's (points: one lit, one lit)
+    a, b = res["lights_2012"], res["lights_2013"]
+    assert a["status"] == 200 and set(a) - {"status"} == {"zone_id", "dataset_ids", "time_period", "next_time_period",
+                                                           "audio_data", "values", "point_count"}
+    assert a["dataset_ids"] == ["night_lights"] and a["point_count"] == 2 and a["audio_data"] > 10000
+    assert abs(a["values"]["night_lights"] - 0.02) < 1e-3 and abs(b["values"]["night_lights"] - 0.03) < 1e-3
+    assert a["time_period"] == "2012-11" and a["next_time_period"] == "2013-01"            # 6 s = 2 monthly bars
+    # several datasets: the ones without data are left out, and the answer says which are in the piece
+    m = res["mix"]
+    assert m["status"] == 200 and set(m["dataset_ids"]) == {"night_lights", "snow", "precipitation"}
+    assert set(m["values"]) <= {"night_lights", "snow", "precipitation"} and "wildfires" not in m["values"]
+    assert res["nothing"]["status"] == 400 and "none of" in res["nothing"]["detail"]
+
+
+def test_chunks_of_one_series_use_the_same_pitch_scale(tmp_path):
+    """Played chunk after chunk, a value must be the same note in every chunk: the pitch is scaled on the whole series."""
+    import orchestra
+    src, out = tmp_path / "nl", tmp_path / "out"
+    src.mkdir()
+    fake_nightlights(src, [2012, 2013, 2014])
+    r = subprocess.run([sys.executable, str(ROOT / "simulation" / "build_monthly_dataset.py"), "--nightlights", str(src),
+                        "--out", str(out), "--res", "2"], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    f = str(out / "real_monthly_2012_2014_nightlights.npz")
+
+    def notes(start, pitch_range):
+        s = orchestra.compose([f], zone="northern_hemi", start=start, duration_s=9.5, pitch_range=pitch_range,
+                              out_dir=tmp_path / "o", name="x")["doc"]
+        return sorted({n["pitch"] for n in s["instruments"]["nightlights"]["notes"]})
+    low, mid, high = notes("2012-03", "series"), notes("2013-03", "series"), notes("2014-03", "series")
+    assert len(low) == len(mid) == len(high) == 1 and low[0] < mid[0] < high[0]        # brighter year = higher note
+    assert notes("2012-03", "window") == notes("2014-03", "window")                    # scaled on the piece: no difference
 

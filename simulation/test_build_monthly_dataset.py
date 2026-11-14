@@ -229,3 +229,64 @@ def test_drop_overlay_lines_keeps_real_gradients(tmp_path):
     assert np.nanmin(cleaned[:360]) == 408 and np.nanmax(cleaned[360:]) == 400      # both hemispheres intact
     assert np.isnan(cleaned[300, 700]) and a[100, 0] == 430                         # NaN stays NaN; the input is not modified
 
+
+def fake_split_precipitation(rain_dir: Path, snow_dir: Path, months: list[str]):
+    """The team's precipitation split in two folders: rain_<YYYY>_<MM>.npy and snow_<YYYY>_<MM>.npy (mm/h).
+    Rain 1 mm/h south of 45N; snow 0.05 mm/h north of 45N."""
+    for m in months:
+        rain, snow = np.zeros((720, 1440), np.float16), np.zeros((720, 1440), np.float16)
+        rain[180:] = 1.0
+        snow[:180] = 0.05
+        np.save(rain_dir / f"rain_{m.replace('-', '_')}.npy", rain)
+        np.save(snow_dir / f"snow_{m.replace('-', '_')}.npy", snow)
+
+
+def fake_nightlights(folder: Path, years: list[int]):
+    """nightlights_<YYYY>.npy: ONE MAP PER YEAR, 720 x 1440 float32, brightness 0-1. The northern hemisphere gets
+    brighter every year (0.02, 0.03, ...); the south stays dark."""
+    for i, y in enumerate(years):
+        a = np.zeros((720, 1440), np.float32)
+        a[:360] = 0.02 + 0.01 * i
+        np.save(folder / f"nightlights_{y}.npy", a)
+
+
+def test_rain_and_snow(tmp_path):
+    rain, snow, out = tmp_path / "rain", tmp_path / "snow", tmp_path / "out"
+    rain.mkdir(), snow.mkdir()
+    fake_split_precipitation(rain, snow, ["2001-01", "2001-02"])
+    r = run("--precip", rain, "--snow", snow, "--out", out, "--res", 2)
+    assert r.returncode == 0, r.stderr
+    p, s = np.load(out / "real_monthly_2001_2001_precipitation.npz"), np.load(out / "real_monthly_2001_2001_snowfall.npz")
+    meta = json.loads((out / "real_monthly_2001_2001_snowfall.json").read_text())
+    lat = p["lat"]
+    assert np.allclose(p["data"][0][lat < 44], 24.0, rtol=1e-3) and np.all(p["data"][0][lat > 46] == 0)      # mm/h -> mm/day
+    assert np.allclose(s["data"][0][lat > 46], 1.2, rtol=1e-2) and np.all(s["data"][0][lat < 44] == 0)
+    assert meta["variable"] == "snowfall" and meta["units"] == "mm/day" and meta["vmax"] == 3 and meta["real"] is True
+
+
+def test_yearly_maps_are_held_for_their_twelve_months(tmp_path):
+    """One map per year -> the monthly time axis of every other dataset, nothing invented between two years."""
+    src, out = tmp_path / "nl", tmp_path / "out"
+    src.mkdir()
+    fake_nightlights(src, [2012, 2013, 2014])
+    r = run("--nightlights", src, "--out", out, "--res", 2)
+    assert r.returncode == 0, r.stderr
+    z = np.load(out / "real_monthly_2012_2014_nightlights.npz")
+    meta = json.loads((out / "real_monthly_2012_2014_nightlights.json").read_text())
+    months = [str(x)[:7] for x in z["time"]]
+    assert z["data"].shape == (36, 90, 180) and months[0] == "2012-01" and months[11] == "2012-12" and months[-1] == "2014-12"
+    assert meta["source_time_step"] == "1 year" and meta["time_step"] == "1 month" and meta["vmax"] == 0.1
+    north = z["data"][:, 10, 10]
+    assert np.allclose(north[:12], 0.02) and np.allclose(north[12:24], 0.03) and np.allclose(north[24:], 0.04)
+    assert np.all(z["data"][:, 80] == 0)
+    # a window in months keeps the years it touches, cut to the months asked for
+    r = run("--nightlights", src, "--out", out, "--res", 2, "--start", "2012-11", "--end", "2013-02", "--prefix", "cut")
+    assert r.returncode == 0, r.stderr
+    z = np.load(out / "cut_nightlights.npz")
+    assert [str(x)[:7] for x in z["time"]] == ["2012-11", "2012-12", "2013-01", "2013-02"]
+    assert np.allclose(z["data"][:, 10, 10], [0.02, 0.02, 0.03, 0.03])
+    # a missing year is refused, like a missing month
+    (src / "nightlights_2013.npy").unlink()
+    r = run("--nightlights", src, "--out", out, "--res", 2, "--prefix", "gap")
+    assert r.returncode != 0 and "2012 -> 2014" in (r.stderr + r.stdout)
+

@@ -48,7 +48,7 @@ CACHE_DIR = Path(os.environ.get("JUKEBOX_CACHE_DIR", ROOT / "backend" / "cache")
 # datasets converted from the team's raw folders by backend/prepare_data.py (the data folder can be read-only)
 BUILT_DIR = Path(os.environ.get("JUKEBOX_BUILT_DIR") or CACHE_DIR / "_datasets")
 CORS = [o.strip() for o in os.environ.get("JUKEBOX_CORS", "*").split(",")]
-API_VERSION = "2.0"
+API_VERSION = "2.1"
 COMPOSITION_ID = re.compile(r"[0-9a-f]{16}")         # what cache_key() produces
 # 1 = a request that names no dataset takes EACH variable from its own best dataset and the composer lines
 # them up by date (temperature since 1880 with precipitation joining in 2000 ...). The Docker image sets it:
@@ -58,7 +58,7 @@ MERGE_DATASETS = os.environ.get("JUKEBOX_MERGE_DATASETS", "0").lower() not in ("
 # The Docker image sets it. 1 (default) = also the engine's own endpoints, for development and tests.
 FULL_API = os.environ.get("JUKEBOX_FULL_API", "1").lower() not in ("", "0", "false", "no")
 CHUNK_SECONDS = float(os.environ.get("JUKEBOX_CHUNK_SECONDS", "30"))     # length of one piece of POST /api/sonify
-FRONTEND_PATHS = ("/api/health", "/api/instruments", "/api/sonify")
+FRONTEND_PATHS = ("/api/health", "/api/instruments", "/api/sonify", "/api/zones/zone-data")
 
 app = FastAPI(title="Earth Information Jukebox: sonification API", version=API_VERSION,
               description="Turns NASA EIC intensity maps into an orchestra (MIDI + audio).")
@@ -182,6 +182,8 @@ class ComposeRequest(BaseModel):
     frames_per_bar: Optional[float] = Field(None, gt=0, le=60, description="data frames per bar; default = dataset hint "
                                             "(daily data: 7 = one bar per week; monthly: 1)")
     mapping: Literal["hybrid", "relative", "absolute"] = "hybrid"
+    pitch_range: Literal["window", "series"] = Field("window", description="lowest/highest note = lowest/highest value "
+                                                     "of this piece (window) or of the whole series of the area (series)")
     loop: bool = False
     audio: bool = Field(True, description="render audio with sampled instruments")
     audio_format: Literal["mp3", "wav"] = "mp3"
@@ -396,7 +398,7 @@ def compose(req: ComposeRequest, request: Request):
             orchestra.compose(
                 [str(f) for f in files], zone=None if (req.bbox or req.cells) else req.zone,
                 bbox=None if req.cells else req.bbox, cells=req.cells, cells_grid=req.cells_grid if req.cells else None,
-                duration_s=req.duration_s,
+                duration_s=req.duration_s, pitch_range=req.pitch_range,
                 surface=req.surface, start=start, end=end, loop=req.loop, mapping=req.mapping,
                 key=req.key, scale=req.scale, bpm=req.bpm, palette=req.palette, only=only,
                 frames_per_bar=req.frames_per_bar,
@@ -420,9 +422,12 @@ def compose(req: ComposeRequest, request: Request):
 # ----------------------------------------------------------------------------
 VARIABLE_ALIASES = {"temperature": "surface_temperature", "temp": "surface_temperature",
                     "rain": "precipitation", "precip": "precipitation", "dust": "aerosol_dust",
-                    "smoke": "aerosol_smoke", "fire": "aerosol_smoke", "carbon_dioxide": "co2", "snow": "snowfall"}
+                    "smoke": "aerosol_smoke", "fire": "aerosol_smoke", "carbon_dioxide": "co2", "snow": "snowfall",
+                    # the webapp's own ids (webapp/src/data/tracks.ts)
+                    "night_lights": "nightlights", "co2_atmosphere": "co2"}
 POINT_GRID = (1800, 3600)      # lat/lng points are placed on a 0.1 degree grid, then rescaled onto each data map
-SHORT_IDS = {"surface_temperature": "temperature", "aerosol_dust": "dust", "aerosol_smoke": "smoke"}   # variable -> dataset_id
+SHORT_IDS = {"surface_temperature": "temperature", "aerosol_dust": "dust", "aerosol_smoke": "smoke",
+             "snowfall": "snow", "nightlights": "night_lights"}                    # variable -> dataset_id
 ROLE_LABELS = {"timpani": "percussion"}
 
 
@@ -442,8 +447,11 @@ def instruments():
         rows.append({"dataset_id": SHORT_IDS.get(var, var), "name": label, "instrument": instrument,
                      "units": ("degC anomaly" if best.get("anomaly") else best.get("units")),
                      "first_time_period": times[0][:n] if times else None,
-                     "last_time_period": times[-1][:n] if times else None})
-    return {"instruments": rows}
+                     "last_time_period": times[-1][:n] if times else None,
+                     # what the webapp's InstrumentInfo declares (webapp/src/services/zoneApi.ts)
+                     "midi_program": cfg["program"], "pitch_range": [cfg["low"], cfg["high"]],
+                     "role": ROLE_LABELS.get(cfg["role"], cfg["role"]), "always_playing": bool(cfg.get("always_on"))})
+    return {"palette": "orchestra", "by_dataset": {r["dataset_id"]: r["instrument"] for r in rows}, "instruments": rows}
 
 
 class SonifyPoint(BaseModel):
@@ -506,8 +514,9 @@ def make_chunk(req: SonifyRequest, request: Request, duration_s: float = CHUNK_S
         area = {"zone": req.zone_id.lower()}
     else:
         raise HTTPException(422, "points is empty: send the selected points [{lat, lng}, ...]")
-    body = {**opts, **area, "variables": variables or None, "duration_s": duration_s, "audio": True,
-            "audio_format": audio_format, "include_notes": False}
+    # pitch_range "series": a long series is played chunk after chunk, so a value must be the same note in each
+    body = {"pitch_range": "series", **opts, **area, "variables": variables or None, "duration_s": duration_s,
+            "audio": True, "audio_format": audio_format, "include_notes": False}
     if req.time_period is not None:
         body["start"] = str(req.time_period)
     try:
@@ -563,6 +572,31 @@ def sonify(req: SonifyRequest, request: Request):
     time period to ask for next."""
     chunk = make_chunk(req, request)
     return {k: chunk[k] for k in SONIFY_FIELDS}
+
+
+class ZoneDataRequest(SonifyRequest):
+    """The same request as the webapp sends it (webapp/src/services/zoneApi.ts): a list of datasets."""
+    dataset_ids: Optional[list[str]] = Field(None, description="dataset ids to combine into one piece")
+
+
+@app.post("/api/zones/zone-data")
+def zone_data(req: ZoneDataRequest, request: Request):
+    """POST /api/sonify under the path and with the field names of the webapp's code: `dataset_ids` in,
+    `dataset_ids` + `values` out. Datasets the server has no data for are left out, not an error, as long as
+    one remains; the answer says which ones are in the piece."""
+    sent = list(req.dataset_ids or ([req.dataset_id] if isinstance(req.dataset_id, str) else req.dataset_id or []))
+    known = {v for g in scan_datasets().values() for v in g["variables"]}
+    variable_of = {d: VARIABLE_ALIASES.get(d.strip().lower(), d.strip().lower()) for d in sent}
+    kept = [d for d in sent if variable_of[d] in known]
+    if sent and not kept:
+        ids = sorted(SHORT_IDS.get(v, v) for v in known)
+        raise HTTPException(400, f"none of {sent} is available; available: {ids} (see GET /api/instruments)")
+    chunk = make_chunk(req.model_copy(update={"dataset_id": kept or None}), request)
+    sent_id = {variable_of[d]: d for d in reversed(kept)}                 # variable -> the id the webapp used
+    values = {sent_id.get(v, SHORT_IDS.get(v, v)): x for v, x in chunk["values"].items() if x is not None}
+    return {"zone_id": chunk["zone_id"], "dataset_ids": [sent_id.get(v, SHORT_IDS.get(v, v)) for v in chunk["values"]],
+            "time_period": chunk["time_period"], "next_time_period": chunk["next_time_period"],
+            "audio_data": chunk["audio_data"], "values": values, "point_count": chunk["point_count"]}
 
 
 @app.post("/api/sonify/debug")

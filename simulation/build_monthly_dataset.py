@@ -12,6 +12,10 @@ Input  (from the data-extraction side, monthly, on the team's 0.25 deg common gr
     temperature_anomaly_<YYYY>_<MM>.npy         (--temperature DIR, one file per month, 1880-01 ->)
         [720,1440] float16, temperature anomaly in degC, NaN = no data,
         row 0 = 90N, column 0 = 180W (see the README.md of that folder)
+    rain_<YYYY>_<MM>.npy / snow_<YYYY>_<MM>.npy (--precip DIR / --snow DIR, one file per month, 2000-06 ->)
+        [720,1440] float16, mm/h: the team's precipitation split into rain and snow (melted water)
+    nightlights_<YYYY>.npy                      (--nightlights DIR, ONE FILE PER YEAR, 2012 -> 2023)
+        [720,1440] float32, brightness 0-1. Repeated for the 12 months of its year (monthly time axis)
     lightning_<YYYY>_<MM>.npy                   (--lightning DIR, one file per month, 2017-03 -> 2023-07)
         [720,1440] float16, share of the pixel with lightning (0-1), observed between 55S and 55N only
     co2_<YYYY>_<MM>.npy                         (--co2 DIR, one file per month, 2002-09 -> 2022-03)
@@ -26,6 +30,8 @@ Output (one monthly time axis, one frame = one bar):
       precipitation         REAL  mm/day (precip_mmh * 24), regridded to `--res` with an area-weighted block mean
       co2                   REAL  ppm, vmin/vmax 365..435 (the range of the delivered files)
       lightning             REAL  share of area with lightning (0-1), vmin/vmax 0..0.4, NaN beyond 55 deg
+      snowfall              REAL  mm/day of melted water (snow_mmh * 24), vmin/vmax 0..3
+      nightlights           REAL  brightness 0-1, vmin/vmax 0..0.1, one value per year held for 12 months
       surface_temperature   REAL  temperature ANOMALY in degC (meta "anomaly": true), played by the piano like the
                                   temperature of the other datasets; vmin/vmax -5..+5 instead of -40..+40.
                                   The source is a 2 deg map copied onto 0.25 deg, so `--res 2` loses nothing.
@@ -68,7 +74,9 @@ HERE = Path(__file__).resolve().parent
 #   factor  : multiply to get the units of simulate_variables.VARIABLES (mm/h * 24 = mm/day)
 SOURCES = {
     "precipitation": dict(pattern="precipitation_monthly_*.npz", array="precip_mmh", factor=24.0,
-                          npy_pattern="precipitation_*_*.npy",          # or one .npy per month (datasets repo)
+                          # or one .npy per month (datasets repo). Since the team split precipitation into
+                          # rain and snow, the files are rain_YYYY_MM.npy: the violins then play the rain alone.
+                          npy_pattern=("precipitation_*_*.npy", "rain_*_*.npy"),
                           source="NASA GPM IMERG daily precipitation rate (GIBS layer IMERG_Precipitation_Rate), "
                                  "monthly mean, extracted by the team (REAL)"),
     # one .npy per month; the values are anomalies, so they get their own range (and "anomaly": true in the
@@ -94,8 +102,22 @@ SOURCES["lightning"] = dict(pattern="lightning_*.npy", reader="monthly_npy", fac
                             units="share of area with lightning (0-1)", vmin=0.0, vmax=0.4, lat_limit=55.0,
                             source="ISS LIS lightning from the NASA SVS 5011 visualization, monthly share of each "
                                    "0.25 deg pixel with lightning, 55S-55N, extracted by the team (REAL)")
+# snow in mm/h of melted water, monthly mean (the part of the precipitation that fell as snow). Over a region
+# the monthly mean is about 0.05 to 1 mm/day, hence vmax 3 (the daily dataset, with its peaks, uses 10).
+SOURCES["snowfall"] = dict(pattern="snow_*_*.npy", reader="monthly_npy", factor=24.0,
+                           units="mm/day", vmin=0.0, vmax=3.0,
+                           source="NASA GPM IMERG daily precipitation rate, the part that fell as snow (melted "
+                                  "water), monthly mean, extracted by the team (REAL)")
+# ONE MAP PER YEAR (nightlights_YYYY.npy): brightness 0-1 of each pixel. The dataset keeps the monthly time
+# axis of all the others, so the yearly map is simply repeated for the 12 months of its year: nothing is
+# invented between two years, and it lines up by date with the monthly variables.
+# vmax 0.1: over a region the mean brightness is about 0.002 (Amazon) to 0.1 (Switzerland).
+SOURCES["nightlights"] = dict(pattern="nightlights_*.npy", reader="yearly_npy", factor=1.0,
+                              units="brightness (0-1)", vmin=0.0, vmax=0.1,
+                              source="NASA Earth at Night (SVS 5276), yearly map of night-time lights, brightness "
+                                     "0-1, extracted by the team (REAL); each yearly map is repeated for its 12 months")
 INPUT_ARGS = {"precipitation": "precip", "surface_temperature": "temperature", "co2": "co2",
-              "lightning": "lightning"}                                                   # variable -> option
+              "lightning": "lightning", "snowfall": "snow", "nightlights": "nightlights"}   # variable -> option
 
 
 def block_mean(stack: np.ndarray, f: int, area: np.ndarray) -> np.ndarray:
@@ -150,12 +172,19 @@ def read_monthly_npy(folder: Path, spec: dict, res: float, start=None, end=None,
     The input step is 360 / W degrees; the H rows are centred on the equator, north first.
     Only the months inside [start, end] are read (the full 1880 -> 2025 temperature folder is 3.4 GB)."""
     pattern = pattern or spec["pattern"]
+    yearly = spec.get("reader") == "yearly_npy"       # one map per year (name ..._YYYY.npy), see SOURCES
     found = []
     for path in glob.glob(str(folder / pattern)):
-        m = re.search(r"(\d{4})_(\d{2})\.npy$", path)
+        m = re.search(r"_(\d{4})\.npy$" if yearly else r"(\d{4})_(\d{2})\.npy$", path)
         if m:
-            found.append((f"{m.group(1)}-{m.group(2)}", path))
-    found = sorted(x for x in found if (not start or x[0] >= start) and (not end or x[0] <= end))
+            found.append((m.group(1) if yearly else f"{m.group(1)}-{m.group(2)}", path))
+    if yearly:      # keep a year when any of its months is inside [start, end]
+        found = sorted(x for x in found if (not start or f"{x[0]}-12" >= start) and (not end or f"{x[0]}-01" <= end))
+        gaps = [f"{a[0]} -> {b[0]}" for a, b in zip(found, found[1:]) if int(b[0]) - int(a[0]) != 1]
+        if gaps:
+            raise SystemExit(f"years are missing in {folder}: {gaps}")
+    else:
+        found = sorted(x for x in found if (not start or x[0] >= start) and (not end or x[0] <= end))
     if not found:
         raise SystemExit(f"no {pattern} in {folder} for the requested months")
     shape = np.load(found[0][1], mmap_mode="r").shape
@@ -187,6 +216,9 @@ def read_monthly_npy(folder: Path, spec: dict, res: float, start=None, end=None,
         if i % 240 == 0 or i == len(found) - 1:
             print(f"  read {Path(path).name} ({i + 1}/{len(found)})", flush=True)
     months = [m for m, _ in found]
+    if yearly:      # the map of a year is the value of each of its 12 months
+        frames = [fr for fr in frames for _ in range(12)]
+        months = [f"{y}-{m:02d}" for y in months for m in range(1, 13)]
     days = [calendar.monthrange(int(m[:4]), int(m[5:7]))[1] for m in months]
     if dropped:
         print(f"  outline pixels dropped: {100 * np.mean(dropped):.1f}% of the valid pixels on average "
@@ -197,11 +229,13 @@ def read_monthly_npy(folder: Path, spec: dict, res: float, start=None, end=None,
 
 def read_variable(folder: Path, spec: dict, res: float, start=None, end=None):
     """All yearly files of one variable -> (months ['YYYY-MM'], data [T, H, W] in final units, n_days [T])."""
-    if spec.get("reader") == "monthly_npy":
+    if spec.get("reader") in ("monthly_npy", "yearly_npy"):
         return read_monthly_npy(folder, spec, res, start, end)
-    if spec.get("npy_pattern") and not glob.glob(str(folder / spec["pattern"])) \
-            and glob.glob(str(folder / spec["npy_pattern"])):        # one .npy per month instead of yearly .npz
-        return read_monthly_npy(folder, spec, res, start, end, pattern=spec["npy_pattern"])
+    if spec.get("npy_pattern") and not glob.glob(str(folder / spec["pattern"])):
+        patterns = spec["npy_pattern"] if isinstance(spec["npy_pattern"], (tuple, list)) else [spec["npy_pattern"]]
+        for pattern in patterns:                                     # one .npy per month instead of yearly .npz
+            if glob.glob(str(folder / pattern)):
+                return read_monthly_npy(folder, spec, res, start, end, pattern=pattern)
     files = sorted(glob.glob(str(folder / spec["pattern"])))
     if not files:
         raise SystemExit(f"no {spec['pattern']} in {folder}")
@@ -227,10 +261,14 @@ def read_variable(folder: Path, spec: dict, res: float, start=None, end=None):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--precip", help="folder with precipitation_monthly_<YYYY>.npz (or precipitation_<YYYY>_<MM>.npy)")
+    ap.add_argument("--precip", help="folder with precipitation_monthly_<YYYY>.npz, precipitation_<YYYY>_<MM>.npy "
+                                     "or rain_<YYYY>_<MM>.npy")
     ap.add_argument("--temperature", help="folder with temperature_anomaly_<YYYY>_<MM>.npy (the team's common grid)")
     ap.add_argument("--co2", help="folder with co2_<YYYY>_<MM>.npy")
     ap.add_argument("--lightning", help="folder with lightning_<YYYY>_<MM>.npy (share of each pixel with lightning, 0-1)")
+    ap.add_argument("--snow", help="folder with snow_<YYYY>_<MM>.npy (mm/h of melted water)")
+    ap.add_argument("--nightlights", help="folder with nightlights_<YYYY>.npy, ONE MAP PER YEAR (brightness 0-1); "
+                                          "each map is repeated for the 12 months of its year")
     ap.add_argument("--res", type=float, default=1.0, choices=[0.25, 0.5, 1.0, 2.0], help="output grid in degrees")
     ap.add_argument("--start", help="first month to keep, 'YYYY-MM'")
     ap.add_argument("--end", help="last month to keep, 'YYYY-MM'")
@@ -283,7 +321,7 @@ def main():
     prefix = a.prefix or f"real_monthly_{first[0][:4]}_{first[-1][:4]}"
     print(f"{len(first)} months {first[0]} .. {first[-1]}  ->  {prefix}_*.npz  ({a.res:g} deg)")
     for var, (months, data, days) in built.items():
-        units, vmin, vmax, _ = svar.VARIABLES[var]
+        units, vmin, vmax, _ = svar.VARIABLES.get(var, (None, 0.0, 1.0, None))   # SOURCES can give its own
         spec = SOURCES[var]
         units, vmin, vmax = spec.get("units", units), spec.get("vmin", vmin), spec.get("vmax", vmax)
         times = np.array([f"{m}-15T00:00:00Z" for m in months])
@@ -295,6 +333,8 @@ def main():
                 "partial_months": partial}        # months averaged over fewer than 25 days of data
         if spec.get("anomaly"):
             meta["anomaly"] = True                 # values are already anomalies (degC away from a normal)
+        if spec.get("reader") == "yearly_npy":     # one map per year, repeated for its 12 months
+            meta["source_time_step"] = "1 year"
         if spec.get("drop_lines"):                 # how the outline pixels were removed, and how many
             meta["dropped_outline_pixels"] = {**spec["drop_lines"], "share_mean_min_max": spec.get("_dropped_share")}
         if a.frames_per_bar:

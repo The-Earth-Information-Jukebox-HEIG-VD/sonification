@@ -169,9 +169,11 @@ def test_single_date_and_duration():
 def test_instruments_list():
     """GET /api/instruments: the datasets the frontend can ask for, and the instrument that plays each."""
     j = client.get("/api/instruments").json()
-    assert list(j) == ["instruments"] and len(j["instruments"]) >= 6
+    assert list(j) == ["palette", "by_dataset", "instruments"] and len(j["instruments"]) >= 6
+    assert j["by_dataset"] == {r["dataset_id"]: r["instrument"] for r in j["instruments"]}
     for r in j["instruments"]:
-        assert list(r) == ["dataset_id", "name", "instrument", "units", "first_time_period", "last_time_period"]
+        assert list(r) == ["dataset_id", "name", "instrument", "units", "first_time_period", "last_time_period",
+                           "midi_program", "pitch_range", "role", "always_playing"]
         assert r["first_time_period"] <= r["last_time_period"] and len(r["first_time_period"]) in (7, 10)
     ids = [r["dataset_id"] for r in j["instruments"]]
     assert {"temperature", "co2", "precipitation", "dust", "smoke", "lightning"} <= set(ids) and len(set(ids)) == len(ids)

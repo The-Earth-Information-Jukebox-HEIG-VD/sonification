@@ -43,7 +43,9 @@ The image is self-contained for audio: `tinysoundfont`, `ffmpeg` and the General
 
 **Data.** `/app/data` receives the team's raw folders from the `datasets` repository, read-only, exactly as the `deployment` compose file mounts them:
 ```
-/app/data/precipitation_2000_2026/precipitation_<YYYY>_<MM>.npy          (one file per month, mm/h)
+/app/data/precipitation_rain_2000_2026/rain_<YYYY>_<MM>.npy              (one file per month, mm/h)
+/app/data/precipitation_snow_2000_2026/snow_<YYYY>_<MM>.npy              (one file per month, mm/h of melted water)
+/app/data/nightlights_2012_2023/nightlights_<YYYY>.npy                   (ONE FILE PER YEAR, brightness 0-1)
 /app/data/temperature_anomaly_1880_2025/temperature_anomaly_<YYYY>_<MM>.npy
 /app/data/lightning_2017_2023/lightning_<YYYY>_<MM>.npy                  (share of each pixel with lightning, 0-1)
 /app/data/co2_2002_2022/co2_<YYYY>_<MM>.npy                              (ppm)
@@ -53,7 +55,9 @@ At start-up `backend/serve.py` runs `backend/prepare_data.py` in the background.
 | dataset | content |
 |---|---|
 | `real_temperature_1880_2025` | temperature anomaly, every month since 1880, 2° |
-| `real_precipitation_2000_2026` | precipitation, June 2000 → November 2026, 1° |
+| `real_precipitation_2000_2026` | rain, June 2000 → November 2026, 1° |
+| `real_snow_2000_2026` | snow (melted water), June 2000 → November 2026, 1° |
+| `real_nightlights_2012_2023` | night lights, 2012 → 2023, 1°; one map per year, repeated for its 12 months |
 | `real_lightning_2017_2023` | lightning activity, March 2017 → July 2023, 1°, 55°S–55°N |
 | `real_co2_2002_2022` | CO₂, September 2002 → March 2022, 1°, outline pixels removed (see below) |
 
@@ -63,6 +67,8 @@ One dataset per variable, one bar per month in all of them. **A request can mix 
 - The recipes are the `RECIPES` list at the top of `backend/prepare_data.py`. To try them without Docker: `python backend/prepare_data.py --raw ../datasets/data --out simulation/output`.
 - Ready-made `<prefix>_<variable>.npz` + `.json` files placed directly in `/app/data` are served as before.
 - **CO₂ outline pixels.** The delivered CO₂ maps still carry the outline of the source picture (coasts, borders) as values near the top of the colour scale, 10–20 ppm above their neighbours, on about a fifth of the pixels. Left in, a small region full of borders reads far too high (Switzerland: about +15 ppm). The converter sets those pixels to "no data" (`drop_lines` in `SOURCES["co2"]`, `simulation/build_monthly_dataset.py`): a pixel more than 4.5 ppm above the lower quartile of its 10° neighbourhood, and its four neighbours. It is a stopgap: once the files have these pixels as NaN, it changes nothing. Each dataset's `.json` records how many pixels were dropped.
+- **Yearly data.** Night lights come as one map per year. The converter repeats each map for the 12 months of its year, so the dataset has the same monthly time axis as the others and lines up with them by date; nothing is invented between two years. In the music the harp holds its note for a year and steps in January.
+- **Same value, same note.** `/api/sonify` plays a long series chunk after chunk, so each instrument's pitch is scaled on the whole series of the selected area (`pitch_range: "series"`), not on the 30 seconds of one chunk. Without it a yearly value, constant inside a chunk, would always be the same middle note.
 - A folder the preparation step does not know is ignored.
 - The image serves only the frontend's two calls and `/api/health` (`JUKEBOX_FULL_API=0`). `-e JUKEBOX_FULL_API=1` also serves the engine's endpoints, e.g. to explore them at `/docs`.
 - `JUKEBOX_MERGE_DATASETS=0` goes back to one dataset per request (the default outside Docker).

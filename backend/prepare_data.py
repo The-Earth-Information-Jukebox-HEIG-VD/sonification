@@ -4,7 +4,10 @@ Turn the team's RAW data folders into the datasets the API serves. Used by the D
 
 In the deployment the `datasets` image fills a read-only volume with the extraction team's files:
 
-    <raw>/precipitation_2000_2026/precipitation_<YYYY>_<MM>.npy      (or precipitation_monthly_<YYYY>.npz)
+    <raw>/precipitation_rain_2000_2026/rain_<YYYY>_<MM>.npy          (or precipitation_<YYYY>_<MM>.npy, or
+                                                                      precipitation_monthly_<YYYY>.npz)
+    <raw>/precipitation_snow_2000_2026/snow_<YYYY>_<MM>.npy
+    <raw>/nightlights_2012_2023/nightlights_<YYYY>.npy               (one map per year)
     <raw>/temperature_anomaly_1880_2025/temperature_anomaly_<YYYY>_<MM>.npy
     <raw>/lightning_2017_2023/lightning_<YYYY>_<MM>.npy
     <raw>/co2_2002_2022/co2_<YYYY>_<MM>.npy
@@ -42,7 +45,10 @@ MARKER = ".preparing"              # exists while a build is running (GET /api/h
 # input name -> the file patterns that identify the team's folder for it
 MONTH = "[0-9][0-9][0-9][0-9]_[0-9][0-9]"
 INPUTS = {
-    "precip": [f"precipitation_{MONTH}.npy", "precipitation_monthly_*.npz"],     # one file per month, or per year
+    # rain only (since the team split precipitation into rain and snow), the former total, or the yearly .npz
+    "precip": [f"rain_{MONTH}.npy", f"precipitation_{MONTH}.npy", "precipitation_monthly_*.npz"],
+    "snow": [f"snow_{MONTH}.npy"],
+    "nightlights": ["nightlights_[0-9][0-9][0-9][0-9].npy"],                      # one file per YEAR
     "temperature": [f"temperature_anomaly_{MONTH}.npy"],
     "lightning": [f"lightning_{MONTH}.npy"],
     "co2": [f"co2_{MONTH}.npy"],
@@ -67,6 +73,9 @@ RECIPES = [
     dict(name="lightning", prefix="real_lightning", needs=["lightning"], args=["--res", "1"]),
     # the converter removes the outline of the source picture that is still in the delivered CO2 values
     dict(name="co2", prefix="real_co2", needs=["co2"], args=["--res", "1"]),
+    dict(name="snow", prefix="real_snow", needs=["snow"], args=["--res", "1"]),
+    # yearly maps: the converter repeats each one for the 12 months of its year
+    dict(name="night lights", prefix="real_nightlights", needs=["nightlights"], args=["--res", "1"]),
 ]
 
 
@@ -96,7 +105,7 @@ def months_span(need: str, folder: Path):
         if m:
             stamps += [f"{m[1]}-{m[2]}"]
         else:
-            y = re.search(r"(\d{4})\.npz$", f.name)
+            y = re.search(r"(\d{4})\.np[yz]$", f.name)          # one file per year
             if y:
                 stamps += [f"{y[1]}-01", f"{y[1]}-12"]
     return (min(stamps), max(stamps)) if stamps else None

@@ -34,6 +34,7 @@ uvicorn backend.app:app --reload --port 8000
 | GET | `/api/options` | everything the UI needs for its menus: zones (with bbox), palettes, keys, scales, the orchestra (which instrument plays which variable), default request |
 | GET | `/api/instruments` | **frontend call**: the datasets and the instrument that plays each (`FRONTEND_API.md`) |
 | GET | `/api/datasets` | available datasets: id, variables (units, range, instrument), number of frames, time range |
+| **POST** | **`/api/zones/zone-data`** | **frontend call**: the same as `/api/sonify` with the webapp's field names (`dataset_ids`, `values`); see `FRONTEND_API.md` |
 | **POST** | **`/api/sonify`** | **frontend call**: selected points + one time period in, 30 s of MP3 inside the JSON out (`FRONTEND_API.md`) |
 | POST | `/api/sonify/debug` | development only: the same with the engine's knobs and a detailed answer |
 | **POST** | **`/api/compose`** | **compose a piece**, with every option and the full score (see below) |
@@ -267,6 +268,13 @@ All fields are optional. The smallest request is `{}` (global zone, default data
 }
 
 ```
+
+### New in v2.1 (rain, snow, yearly night lights; the webapp's own path)
+- new variables from the team's data: **snow** (`snow`, glockenspiel; mm/day of melted water) and **night lights** (`night_lights`, harp; brightness 0–1, **yearly**: one value per year, held for its 12 months). `precipitation` is now the rain alone.
+- `POST /api/zones/zone-data`: the same call as `/api/sonify` under the path and field names of the webapp's code (`dataset_ids` in; `dataset_ids` and `values` out). Datasets without data on the server are left out, not an error.
+- `GET /api/instruments` also has what the webapp's `InstrumentInfo` declares (`midi_program`, `pitch_range`, `role`, `always_playing`) and `palette`, `by_dataset`.
+- the ids of `webapp/src/data/tracks.ts` are accepted: `night_lights`, and `co2_atmosphere` as another name for `co2`.
+- `/api/compose`: `pitch_range` = `window` (default: lowest/highest note = lowest/highest value of the piece) or `series` (of the whole series of the area). `/api/sonify` uses `series`, so the same value is the same note in every chunk.
 
 ### New in v2.0 (the frontend API is two calls)
 - `POST /api/sonify` takes exactly the frontend's request (`zone_id`, `zone_name`, `dataset_id`, `points`, `time_period`, `aggregation`) and answers with exactly `zone_id`, `dataset_id`, `time_period`, `next_time_period`, `audio_data`, `value`, `point_count`. Its former options moved to `POST /api/sonify/debug`.

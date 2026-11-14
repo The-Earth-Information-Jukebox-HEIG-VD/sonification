@@ -76,6 +76,11 @@ ORCHESTRA = {
                                 restrike=True),   # sounds an octave higher; percussive -> re-struck every beat
     "lightning":           dict(name="Lightning - Xylophone", role="timpani", program=13, channel=4,
                                 low=77, high=101, gain=3.0, gate=0.08, levels=[0.35, 0.60, 0.85], level=0.75, pan=104),
+    # yearly data (one value per year, held for its 12 months): a plucked harp, brighter = higher. A first choice,
+    # made when the night-lights data arrived: change the instrument and its numbers here.
+    "nightlights":         dict(name="Night lights - Harp (melody)", role="melody", program=46, channel=7,
+                                low=60, high=84, gain=2.0, gate=0.03, levels=[0.35, 0.65], level=0.80, pan=52,
+                                restrike=True),   # plucked -> re-struck every beat
 }
 # ----------------------------------------------------------------------------
 # Regional palettes (fun!): same roles and registers, local instruments.
@@ -215,11 +220,14 @@ def sample_beats(series, n_ref, n_beats, fpb, bpb, loop, smooth):
     return ys[np.clip(np.floor(pos + 1e-9).astype(int), 0, len(ys) - 1)]
 
 
-def rel_norm(v):
+def rel_norm(v, span=None):
+    """Values -> 0..1 relative to their own lowest and highest, or to a given (lowest, highest) span."""
     f = v[np.isfinite(v)]
     if not len(f):
         return np.full_like(v, np.nan)
     lo, hi = f.min(), f.max()
+    if span is not None and np.isfinite(span[0]) and np.isfinite(span[1]):
+        lo, hi = float(span[0]), float(span[1])
     if hi - lo < 1e-9:
         return np.where(np.isfinite(v), 0.5, np.nan)
     return np.clip((v - lo) / (hi - lo), 0, 1)
@@ -874,7 +882,7 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
             preview=False, render=False, reverb=0.28, audio_format="wav", verbose=False,
             intro=True, tension=True, climax=True, humanize=0.5,
             style="data", quantize="scale", markers=True, marker_threshold=1.5, audio_engine="auto",
-            cells=None, cells_grid=None, duration_s=None):
+            cells=None, cells_grid=None, duration_s=None, pitch_range="window"):
     """Data maps -> score. Writes MIDI (+ stems, JSON, optional PNG/audio) to out_dir and returns
     a dict with the score document, file paths and stats.
 
@@ -884,6 +892,12 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
     `maps` can mix datasets (one map per variable): the variables are then lined up by date, and an
     instrument is silent for the dates its own data does not cover (see _align_by_date).
 
+    pitch_range: what "low" and "high" mean for the pitch of an instrument (mapping hybrid / relative).
+    "window" (default): the lowest and highest value of the piece itself, so every piece uses the whole
+    register. "series": the lowest and highest value of the WHOLE series of this area, so the same value
+    is the same note in every piece cut from that series. Needed when a long series is played in chunks,
+    and for yearly data, which is constant inside a short piece.
+
     duration_s: play this many seconds of data starting at `start` (instead of giving `end`).
     As many bars as fit at about `bpm` are taken, then the tempo is nudged so that they last
     exactly duration_s. Near the end of the dataset, where fewer frames are left, the piece is shorter."""
@@ -892,6 +906,8 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
         raise ComposeError("style must be 'data' or 'musical'")
     if quantize not in ("scale", "pentatonic", "chromatic"):
         raise ComposeError("quantize must be 'scale', 'pentatonic' or 'chromatic'")
+    if pitch_range not in ("window", "series"):
+        raise ComposeError("pitch_range must be 'window' or 'series'")
     musical = style == "musical"
     if not musical:      # data-faithful: nothing that isn't in the data
         intro, climax, humanize, add_ending = False, False, None, False
@@ -954,6 +970,9 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
         if var in full:
             raise ComposeError(f"two maps for '{var}' ({full[var]['file']} and {Path(f).name}): give one per variable")
         full[var] = dict(mean=m, z=zsc, meta=meta, times=times, file=Path(f).name)
+    for d in full.values():                # lowest and highest value of the WHOLE series of this area
+        ok = np.isfinite(d["mean"])
+        d["span"] = (float(d["mean"][ok].min()), float(d["mean"][ok].max())) if ok.any() else (np.nan, np.nan)
     hint = _align_by_date(full)            # maps from different datasets -> one time axis (no-op for one dataset)
     for var, d in full.items():
         m, zsc, meta, times = d["mean"], d["z"], d["meta"], d["times"]
@@ -966,7 +985,7 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
             times = times[win] if times is not None else None
         if len(m) < 1 or not np.isfinite(m).any():
             continue                       # nothing of this variable in the window: its instrument stays out
-        series[var] = dict(mean=m, z=zsc, meta=meta, times=times)
+        series[var] = dict(mean=m, z=zsc, meta=meta, times=times, span=d["span"])
     if not series:
         raise ComposeError("no usable data for this zone / selection")
 
@@ -985,7 +1004,7 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
         vals = sample_beats(d["mean"], n_ref, n_beats, fpb, bpb, loop, smooth)
         vmin, vmax = d["meta"].get("vmin", np.nanmin(vals)), d["meta"].get("vmax", np.nanmax(vals))
         absn = np.clip((vals - vmin) / ((vmax - vmin) or 1), 0, 1)
-        reln = rel_norm(vals)
+        reln = rel_norm(vals, d.get("span") if pitch_range == "series" else None)
         d["values"] = vals
         d["norm"] = absn if mapping == "absolute" else reln
         pres = np.clip((reln if mapping == "relative" else absn) * cfg["gain"], 0, 1)

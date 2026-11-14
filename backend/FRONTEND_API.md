@@ -9,70 +9,82 @@ Two calls. No options.
 
 ```json
 {
+  "palette": "orchestra",
+  "by_dataset": {"temperature": "Piano (chords)", "co2": "Contrabass", "precipitation": "Violins (melody)",
+                 "snow": "Glockenspiel (melody)", "lightning": "Xylophone", "night_lights": "Harp (melody)"},
   "instruments": [
-    {"dataset_id": "temperature",   "name": "Temperature", "instrument": "Piano (chords)",   "units": "degC anomaly",
-     "first_time_period": "1880-01", "last_time_period": "2025-12"},
-    {"dataset_id": "co2",           "name": "CO2",         "instrument": "Contrabass",       "units": "ppm",
-     "first_time_period": "2002-09", "last_time_period": "2022-03"},
-    {"dataset_id": "precipitation", "name": "Rain",        "instrument": "Violins (melody)", "units": "mm/day",
-     "first_time_period": "2000-06", "last_time_period": "2026-11"},
-    {"dataset_id": "lightning",     "name": "Lightning",   "instrument": "Xylophone",        "units": "share of area with lightning (0-1)",
-     "first_time_period": "2017-03", "last_time_period": "2023-07"}
+    {"dataset_id": "temperature", "name": "Temperature", "instrument": "Piano (chords)", "units": "degC anomaly",
+     "first_time_period": "1880-01", "last_time_period": "2025-12",
+     "midi_program": 0, "pitch_range": [48, 72], "role": "harmony", "always_playing": true}
   ]
 }
 ```
 
-Only the datasets the server has data for are listed. `dataset_id` is what you send to `/api/sonify`.
+One entry per dataset the server has data for:
 
-## 2. `POST /api/sonify`: points + a time period in, music out
+| `dataset_id` | instrument | units | data |
+|---|---|---|---|
+| `temperature` | Piano (chords) | °C anomaly | 1880-01 → 2025-12 |
+| `co2` | Contrabass | ppm | 2002-09 → 2022-03 |
+| `precipitation` | Violins (melody) | mm/day of rain | 2000-06 → 2026-11 |
+| `snow` | Glockenspiel (melody) | mm/day of melted water | 2000-06 → 2026-11 |
+| `lightning` | Xylophone | share of the area with lightning (0–1) | 2017-03 → 2023-07 |
+| `night_lights` | Harp (melody) | brightness (0–1) | 2012-01 → 2023-12, one value per year |
 
-Request:
+`dataset_id` is what you send below. `co2_atmosphere` is also accepted for `co2`. The webapp's other tracks (`co2_emissions`, `wildfires`, `antarctica_melt`, `ecosystem`, `deforestation`) have no data yet.
+
+## 2. Points + a time period in, music out
+
+Two spellings of the same call. Use either.
+
+### `POST /api/zones/zone-data` (the one `webapp/src/services/zoneApi.ts` calls)
 ```json
 {
   "zone_id": "france",
   "zone_name": "France",
-  "dataset_id": "temperature",
-  "points": [
-    {"lat": 48.8566, "lng": 2.3522, "x": 512, "y": 234},
-    {"lat": 48.1173, "lng": -1.6778, "x": 508, "y": 236},
-    {"lat": 43.2965, "lng": 5.3698, "x": 520, "y": 248}
-  ],
-  "time_period": "1880-01",
+  "dataset_ids": ["temperature", "night_lights"],
+  "points": [{"lat": 48.8566, "lng": 2.3522, "x": 512, "y": 234}, {"lat": 43.2965, "lng": 5.3698, "x": 520, "y": 248}],
+  "time_period": "2015-01",
   "aggregation": "mean"
 }
 ```
-
-Response:
 ```json
 {
   "zone_id": "france",
-  "dataset_id": "temperature",
-  "time_period": "1880-01",
-  "next_time_period": "1880-11",
+  "dataset_ids": ["temperature", "night_lights"],
+  "time_period": "2015-01",
+  "next_time_period": "2015-11",
   "audio_data": "<base64 of an MP3 file>",
-  "value": -0.23,
-  "point_count": 3
+  "values": {"temperature": 1.42, "night_lights": 0.031},
+  "point_count": 2
 }
 ```
+A dataset the server has no data for is left out of the piece (no error, as long as one remains): `dataset_ids` in the answer says which ones were combined. `values` has an entry for each dataset that has data at `time_period`.
 
+### `POST /api/sonify` (one dataset, one value)
+Request: the same with `"dataset_id": "temperature"` (a single id, or a list).
+Response: `zone_id`, `dataset_id`, `time_period`, `next_time_period`, `audio_data`, `value`, `point_count`.
+
+### Fields
 | field | meaning |
 |---|---|
 | `zone_id`, `zone_name` | your own labels; `zone_id` is sent back as is |
-| `dataset_id` | one id of `/api/instruments`. A list (`["temperature", "precipitation"]`) plays several instruments together |
 | `points` | the selected points. `lat` and `lng` are used; `x`, `y` are accepted and ignored |
 | `time_period` | where the music starts, `"YYYY-MM"` |
-| `aggregation` | `"mean"` (the only one) |
-| `audio_data` | 30 seconds of music as a base64 MP3. Play it with `new Audio("data:audio/mpeg;base64," + audio_data)` |
+| `aggregation` | `"mean"` (the only one; `sum`, `max`, `min` are refused with a `422`) |
+| `audio_data` | 30 seconds of music as a base64 MP3. `decodeAudioData` in `zoneApi.ts` plays it as is |
 | `next_time_period` | send it as the next `time_period` to continue. `null` when the data ends |
-| `value` | the mean of the dataset over the points at `time_period`, in the units of `/api/instruments`. `null` when the dataset has no data yet at that date |
+| `value` / `values` | the mean of each dataset over the points at `time_period`, in the units of `/api/instruments` |
 | `point_count` | the number of points received |
 
-What to expect:
-- **30 seconds is 10 months**: one bar of music per month. So the next period after `1880-01` is `1880-11`.
+### What to expect
+- **30 seconds is 10 months**: one bar of music per month. The next period after `2015-01` is `2015-11`, not `2015-02`: use `next_time_period`, do not add one month yourself.
 - **`time_period` in the answer is where the music really starts.** It differs from the request only when you ask for a date before the first data.
-- **A list of datasets**: each instrument plays where its own data exists and is silent elsewhere (ask for temperature and precipitation in 1999, the violins come in in June 2000). `value` is the first dataset's.
-- **Errors**: `400` unknown `dataset_id` or no data for these points and this period; `422` malformed request (no points, latitude out of range, another `aggregation`).
-- A first request takes 2 to 4 seconds; the same request again is immediate.
+- **Several datasets**: each instrument plays where its own data exists and is silent elsewhere (temperature and precipitation from 1999: the violins come in in June 2000).
+- **Yearly data** (`night_lights`): the value is the year's, so the harp holds its note for 12 bars and changes in January.
+- **The same value is the same note** in every piece of the same area, so consecutive pieces connect.
+- **Errors**: `400` unknown dataset or no data for these points and this period; `422` malformed request (no points, latitude out of range, another `aggregation`).
+- A first request takes 2 to 5 seconds; the same request again is immediate.
 
 `GET /api/health` answers `{"status": "ok", ...}` when the server is up; `"preparing_data": true` means it is still loading its datasets after a start (a few minutes, once).
 
