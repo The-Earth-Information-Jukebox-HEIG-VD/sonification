@@ -19,6 +19,7 @@ uvicorn backend.app:app --reload --port 8000
 |---|---|---|
 | `JUKEBOX_DATA_DIR` | `simulation/output` | folder with the intensity maps (`<dataset>_<variable>.npz` + `.json`, see `simulation/INTENSITY_MAP_SPEC.md`). When the real extraction is ready, point this at its output folder: nothing else changes. |
 | `JUKEBOX_CACHE_DIR` | `backend/cache` | generated compositions (safe to delete) |
+| `JUKEBOX_MERGE_DATASETS` | `0` | `1`: a request that names no dataset takes each variable from its own best dataset, lined up by date (set in the Docker image) |
 | `JUKEBOX_BUILT_DIR` | `<cache>/_datasets` | datasets converted from the team's raw folders by `backend/prepare_data.py`; scanned in addition to `JUKEBOX_DATA_DIR`. In the Docker image this happens by itself at start-up (see the README) |
 | `JUKEBOX_CORS` | `*` | allowed origins, comma-separated |
 
@@ -329,7 +330,10 @@ All fields are optional. The smallest request is `{}` (global zone, default data
 
 ### New in v1.9 (lightning, and what the Docker image serves)
 - new variable from the team's data: **lightning** (`dataset_id: "lightning"`, xylophone). Its value is the share of the selected area with lightning in the month, from 0 to 1, not a number of flashes. It exists from March 2017 to July 2023 and only between 55°S and 55°N; an area entirely outside that band has no data (`400`).
-- the Docker image serves `real_temperature_*`, `real_precipitation_*`, `real_lightning_*`, `real_monthly_*` (precipitation + temperature) and `real_all_*` (all three), all at one bar per month. The server picks among them per request, as described under v1.7.
+- the Docker image serves one dataset per variable (`real_temperature_*`, `real_precipitation_*`, `real_lightning_*`), all at one bar per month, and **merges them per request**: each requested variable is read from its own dataset and they are lined up by date. Any combination can be asked for any start date. An instrument is silent for the months its data does not cover (its entry in `values` is `null` there), and a variable with no data at all in the period is left out of the piece.
+- `/api/sonify` answers with `source_datasets` (`{variable: dataset}`) when several datasets were merged; `source_dataset` is then the main variable's. `value` and `units` are those of the first requested variable that is in the piece.
+- with no `dataset_id`, the piece has every variable the server has data for in that period.
+- the merge is switched on with `JUKEBOX_MERGE_DATASETS=1` (the image sets it; `GET /api/health` reports `merge_datasets`). Without it, or when a `dataset` is named, a request is served from one dataset as before. In `/api/compose`, `request.datasets` gives the `{variable: dataset}` that was used.
 
 ### New in v1.8 (temperature anomaly 1880 → 2025)
 - new dataset `real_monthly_1880_2025`: the team's monthly temperature anomaly, January 1880 to December 2025, 2° (`python simulation/build_monthly_dataset.py --temperature DIR --res 2 --frames-per-bar 12`). One bar = one year by default, so a 30 s chunk of `/api/sonify` is 10 years.

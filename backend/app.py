@@ -13,6 +13,7 @@ Config (environment variables):
   JUKEBOX_DATA_DIR    folder with intensity maps (*.npz + *.json)   default: simulation/output
   JUKEBOX_CACHE_DIR   where compositions are written / cached        default: backend/cache
   JUKEBOX_BUILT_DIR   datasets built by backend/prepare_data.py      default: <cache>/_datasets
+  JUKEBOX_MERGE_DATASETS  1 = each variable from its own dataset, lined up by date   default: 0
   JUKEBOX_CORS        comma-separated allowed origins                default: *
 """
 from __future__ import annotations
@@ -46,6 +47,10 @@ BUILT_DIR = Path(os.environ.get("JUKEBOX_BUILT_DIR") or CACHE_DIR / "_datasets")
 CORS = [o.strip() for o in os.environ.get("JUKEBOX_CORS", "*").split(",")]
 API_VERSION = "1.9"
 COMPOSITION_ID = re.compile(r"[0-9a-f]{16}")         # what cache_key() produces
+# 1 = a request that names no dataset takes EACH variable from its own best dataset and the composer lines
+# them up by date (temperature since 1880 with precipitation joining in 2000 ...). The Docker image sets it:
+# there every dataset holds one variable. 0 (default) = one dataset per request, as before.
+MERGE_DATASETS = os.environ.get("JUKEBOX_MERGE_DATASETS", "0").lower() not in ("", "0", "false", "no")
 
 app = FastAPI(title="Earth Information Jukebox: sonification API", version=API_VERSION,
               description="Turns NASA EIC intensity maps into an orchestra (MIDI + audio).")
@@ -109,9 +114,11 @@ def default_dataset() -> Optional[str]:
 
 def pick_dataset(variables=None, start=None) -> Optional[str]:
     """The dataset for a request that names none. It must have every requested variable; among those,
-    prefer one whose dates cover `start` (a date as text), then the most REAL variables (of the requested
-    ones, or overall when none is requested), then the most variables, then the most frames.
-    With no variables and no date this is default_dataset()."""
+    prefer one whose dates cover `start` (a date as text), then the most REAL variables of the requested ones,
+    then the LONGEST series (a request for temperature alone gets 1880 -> today, not the few years a
+    many-variable dataset covers), then the most variables.
+    When no variable is requested (the whole orchestra): the most real variables, then the most variables,
+    then the most frames; with no date either, this is default_dataset()."""
     ds = scan_datasets()
     want = set(variables or [])
     candidates = [k for k, g in ds.items() if want <= set(g["variables"])]
@@ -125,8 +132,20 @@ def pick_dataset(variables=None, start=None) -> Optional[str]:
             n = len(start)
             covers = g["time_start"][:n] <= start <= g["time_end"][:n]
         real = set(g.get("real_variables", []))
-        return covers, len(want & real) if want else len(real), len(g["variables"]), g["frames"]
+        if want:
+            return covers, len(want & real), g["frames"], len(g["variables"])
+        return covers, len(real), len(g["variables"]), g["frames"]
     return max(candidates, key=rank)
+
+
+def merged_sources(variables=None, start=None) -> Optional[dict]:
+    """{variable: dataset id}: every requested variable (or, with none requested, every variable the server
+    has) from its own best dataset, see pick_dataset(). None when a requested variable exists nowhere."""
+    ds = scan_datasets()
+    known = {v for g in ds.values() for v in g["variables"]}
+    wanted = list(variables) if variables else [v for v in orchestra.ORCHESTRA if v in known]
+    sources = {v: pick_dataset([v], start) for v in wanted}
+    return None if not sources or any(k is None for k in sources.values()) else sources
 
 
 # ----------------------------------------------------------------------------
@@ -300,6 +319,7 @@ def health():
     import sampler
     return {"status": "ok", "version": API_VERSION, "datasets": len(ds), "data_dir": str(DATA_DIR),
             "built_dir": str(BUILT_DIR), "preparing_data": (BUILT_DIR / ".preparing").exists(),
+            "merge_datasets": MERGE_DATASETS,
             "audio_rendering": audio_ok, "mp3_encoding": bool(shutil.which("ffmpeg")),
             "orchestral_samples": sampler.vsco_available()}
 
@@ -334,15 +354,23 @@ def datasets():
 @app.post("/api/compose")
 def compose(req: ComposeRequest, request: Request):
     ds = scan_datasets()
-    ds_id = req.dataset or pick_dataset(req.variables, frame_or_date(req.start)) or default_dataset()
-    if not ds_id or ds_id not in ds:
-        raise HTTPException(404, f"dataset '{req.dataset}' not found; see GET /api/datasets")
-    group = ds[ds_id]
-    if req.variables:
-        unknown = set(req.variables) - set(group["variables"])
-        if unknown:
-            raise HTTPException(400, f"variables not in dataset: {sorted(unknown)}")
-    stamp = [(f.name, f.stat().st_mtime) for f in group["files"]]
+    sources = merged_sources(req.variables, frame_or_date(req.start)) if MERGE_DATASETS and not req.dataset else None
+    if sources and len(set(sources.values())) > 1:
+        # each variable from its own dataset; the composer lines them up by date
+        files = [f for v, k in sources.items() for f in ds[k]["files"] if f.stem == f"{k}_{v}"]
+        ds_id, only = " + ".join(sorted(set(sources.values()))), list(sources)
+    else:
+        sources = None
+        ds_id = req.dataset or pick_dataset(req.variables, frame_or_date(req.start)) or default_dataset()
+        if not ds_id or ds_id not in ds:
+            raise HTTPException(404, f"dataset '{req.dataset}' not found; see GET /api/datasets")
+        group = ds[ds_id]
+        if req.variables:
+            unknown = set(req.variables) - set(group["variables"])
+            if unknown:
+                raise HTTPException(400, f"variables not in dataset: {sorted(unknown)}")
+        files, only = group["files"], req.variables
+    stamp = [(f.name, f.stat().st_mtime) for f in files]
     key = cache_key(req, ds_id, stamp)
     folder = CACHE_DIR / key
     t0 = time.perf_counter()
@@ -355,11 +383,11 @@ def compose(req: ComposeRequest, request: Request):
         start, end = frame_or_date(req.start), frame_or_date(req.end)
         try:
             orchestra.compose(
-                [str(f) for f in group["files"]], zone=None if (req.bbox or req.cells) else req.zone,
+                [str(f) for f in files], zone=None if (req.bbox or req.cells) else req.zone,
                 bbox=None if req.cells else req.bbox, cells=req.cells, cells_grid=req.cells_grid if req.cells else None,
                 duration_s=req.duration_s,
                 surface=req.surface, start=start, end=end, loop=req.loop, mapping=req.mapping,
-                key=req.key, scale=req.scale, bpm=req.bpm, palette=req.palette, only=req.variables,
+                key=req.key, scale=req.scale, bpm=req.bpm, palette=req.palette, only=only,
                 frames_per_bar=req.frames_per_bar,
                 out_dir=folder, name="score", preview=req.score_image, render=req.audio,
                 reverb=req.reverb, audio_format=req.audio_format,
@@ -369,7 +397,8 @@ def compose(req: ComposeRequest, request: Request):
             raise HTTPException(400, str(e))
         (folder / "score_preview.wav").unlink(missing_ok=True)  # rough synth preview not needed here
         echo = {**req.model_dump(exclude={"cells"}), "dataset": ds_id,      # the positions are not echoed back,
-                "n_cells": len(req.cells) if req.cells else None}             # only how many were sent
+                "n_cells": len(req.cells) if req.cells else None,             # only how many were sent
+                "datasets": sources}       # {variable: dataset} when the variables come from several datasets
         (folder / "request.json").write_text(json.dumps(echo, default=str))
         return build_response(request, key, req.include_notes, False, time.perf_counter() - t0)
 
@@ -406,7 +435,11 @@ def instruments(palette: str = "orchestra", zone: Optional[str] = None):
             "always_playing": bool(cfg.get("always_on")),       # false: plays only while the phenomenon is present
             "units": info.get("units"), "available": best is not None,
             "real_data": bool(info.get("real")),
-            "time_start": ds[best]["time_start"] if best else None, "time_end": ds[best]["time_end"] if best else None,
+            # the whole period this variable can be asked for, over every dataset that has it
+            "time_start": min((g["time_start"] for g in ds.values() if var in g["variables"] and g["time_start"]),
+                              default=None),
+            "time_end": max((g["time_end"] for g in ds.values() if var in g["variables"] and g["time_end"]),
+                            default=None),
             "found_in": sorted(k for k, g in ds.items() if var in g["variables"]),
             "also_accepted": sorted({var, *[a for a, v in VARIABLE_ALIASES.items() if v == var]} - {short}),
             "midi_program": cfg["program"], "pitch_range": [cfg["low"], cfg["high"]]})
@@ -472,26 +505,30 @@ def sonify(req: SonifyRequest, request: Request):
         creq = ComposeRequest(**body)
     except ValidationError as e:
         raise HTTPException(422, [{"loc": list(x["loc"]), "msg": x["msg"]} for x in e.errors()])
-    if creq.dataset is None:      # the dataset that has these variables and, if possible, covers the date
+    if creq.dataset is None and not MERGE_DATASETS:   # the dataset that has these variables and, if possible, covers the date
         creq.dataset = pick_dataset(variables, frame_or_date(creq.start))
         if creq.dataset is None:
             where = {v: sorted(k for k, g in ds.items() if v in g["variables"]) for v in variables}
             raise HTTPException(400, f"no single dataset has all of {variables}; they are in {where}")
     out = compose(creq, request)
+    used = out["request"].get("datasets") or {}         # {variable: dataset} when several datasets were merged
     group = ds.get(out["request"]["dataset"], {})
     score, folder = out["score"], CACHE_DIR / out["id"]
     audio = next((folder / f"score.{e}" for e in ("mp3", "wav") if (folder / f"score.{e}").exists()), None)
     if audio is None:
         raise HTTPException(503, "audio rendering is not available on the server (see GET /api/health)")
     # the period right after this chunk, in the same form as time_period ('2024-03', or a day for daily data)
-    times = group.get("times") or []
+    times = sorted({x for k in set(used.values()) for x in ds[k].get("times") or []}) if used         else (group.get("times") or [])
     n = 7 if len({t[:7] for t in times}) == len(times) else 10
     end_time = score.get("time_last_frame") or score["time_end"]       # the last frame played, not the start of the last bar
     last = times.index(end_time) if end_time in times else None
     nxt = times[last + 1][:n] if last is not None and last + 1 < len(times) else None
     first = {v: (i["values_per_beat"][0] if i.get("values_per_beat") else None, i.get("units"))
              for v, i in score["instruments"].items() if v != "anomaly_markers"}
-    main = variables[0] if variables else next(iter(first), None)
+    # the main variable: the first one asked for that is actually in the piece (a variable with no data in
+    # this period is left out by the composer)
+    main = next((v for v in variables if v in first), None) or next(iter(first), None)
+    info = ds.get(used.get(main) or out["request"]["dataset"], {}).get("variables", {}).get(main, {}) if main else {}
     return {"zone_id": req.zone_id, "zone_name": req.zone_name, "dataset_id": req.dataset_id,
             "time_period": score["time_start"][:n] if score["time_start"] else None,
             "next_time_period": nxt,
@@ -502,9 +539,12 @@ def sonify(req: SonifyRequest, request: Request):
             "point_count": len(req.points or []), "cell_count": score.get("cells"),
             "aggregation": req.aggregation, "time_end": end_time[:n] if end_time else None,
             "duration_s": score["duration_s"], "composition_id": out["id"], "cached": out["cached"],
-            "source_dataset": out["request"]["dataset"],          # which dataset of GET /api/datasets was played
-            "real_data": bool(main and group.get("variables", {}).get(main, {}).get("real")),
-            "anomaly": bool(main and group.get("variables", {}).get(main, {}).get("anomaly"))}   # value = degC vs normal
+            # which dataset of GET /api/datasets was played (the main variable's, when several were merged)
+            "source_dataset": used.get(main) or out["request"]["dataset"],
+            # {variable: dataset} when several were merged; only the variables that are in the piece
+            "source_datasets": {v: k for v, k in used.items() if v in first} or None,
+            "real_data": bool(info.get("real")),
+            "anomaly": bool(info.get("anomaly"))}                 # value = degC vs normal
 
 
 @app.get("/api/compositions/{comp_id}")

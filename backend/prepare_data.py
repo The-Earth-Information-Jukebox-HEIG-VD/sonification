@@ -56,19 +56,13 @@ def input_files(need: str, folder: Path) -> list[Path]:
 #   prefix : the dataset is served as <prefix>_<first year>_<last year>. Each recipe has its own, so two
 #            recipes that happen to cover the same years never overwrite each other.
 RECIPES = [
-    # One bar = one month in every dataset. The frontend decides what it asks for (start date, length, and
-    # "frames_per_bar" in the request if it wants a faster time scale), so no dataset gets a scale of its own.
-    # 1. every month the team has for each variable, one dataset per variable
+    # One dataset per variable, with every month the team has for it; one bar = one month in all of them.
+    # The API (JUKEBOX_MERGE_DATASETS=1 in the Docker image) takes each requested variable from its own
+    # dataset and the composer lines them up by date, so no combined dataset has to be built: temperature
+    # can start in 1880, with precipitation joining in 2000 and lightning in 2017.
     dict(name="temperature history", prefix="real_temperature", needs=["temperature"], args=["--res", "2"]),
     dict(name="precipitation", prefix="real_precipitation", needs=["precip"], args=["--res", "1"]),
     dict(name="lightning", prefix="real_lightning", needs=["lightning"], args=["--res", "1"]),
-    # 2. the months several variables share, in one dataset, so their instruments can play together.
-    #    Two of them: lightning only exists for a few years and would otherwise cut the long
-    #    precipitation + temperature series down to those years.
-    dict(name="precipitation + temperature", prefix="real_monthly", needs=["precip", "temperature"],
-         args=["--res", "1"]),
-    dict(name="precipitation + temperature + lightning", prefix="real_all",
-         needs=["precip", "temperature", "lightning"], args=["--res", "1"]),
 ]
 
 
@@ -173,6 +167,11 @@ def prepare(raw: Path, out: Path, force: bool = False) -> int:
     marker = out / MARKER
     built = 0
     try:
+        for gone in [n for n in stamp if n not in {r["name"] for r in RECIPES}]:     # a recipe that was removed
+            for f in stamp.pop(gone).get("files", []):
+                (out / f).unlink(missing_ok=True)
+            stamp_path.write_text(json.dumps(stamp, indent=2))
+            log(f"removed the datasets of '{gone}' (no longer built)")
         for recipe in RECIPES:
             name = recipe["name"]
             if any(n not in inputs for n in recipe["needs"]):

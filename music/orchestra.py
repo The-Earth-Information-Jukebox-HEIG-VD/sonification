@@ -838,6 +838,35 @@ def _time_window(times, start, end, count=None):
     return slice(lo, hi + 1)
 
 
+def _align_by_date(full: dict):
+    """Put the variables on ONE time axis when their maps come from different datasets.
+
+    Each variable can come from its own dataset, with its own first and last date (temperature since 1880,
+    precipitation since 2000, lightning 2017-2023 ...). The common axis is every date any of them has; where
+    a variable's own series does not reach, it gets NaN, which the instruments already treat as "no data":
+    they stay silent there. Maps that already share their dates (one dataset) are left untouched.
+
+    Returns the frames-per-bar hint to use for the merged axis (None = no opinion), and edits `full` in place."""
+    lists = {v: (None if d["times"] is None else [str(x) for x in d["times"]]) for v, d in full.items()}
+    if len(full) < 2 or any(ts is None for ts in lists.values()) or len({tuple(ts) for ts in lists.values()}) == 1:
+        return None
+    axis = sorted(set().union(*lists.values()))          # ISO dates sort chronologically
+    where = {x: i for i, x in enumerate(axis)}
+    for v, ts in lists.items():
+        own = [where[x] for x in ts]
+        if own != list(range(own[0], own[0] + len(own))):
+            raise ComposeError(f"the maps do not share a time step ('{v}' falls between the dates of the others); "
+                               f"take them from datasets with the same step, or from one dataset")
+        d = full[v]
+        for key in ("mean", "z"):
+            out = np.full(len(axis), np.nan)
+            out[own[0]: own[0] + len(own)] = d[key]
+            d[key] = out
+        d["times"] = np.array(axis)
+    hints = {float(d["meta"]["frames_per_bar"]) for d in full.values() if d["meta"].get("frames_per_bar")}
+    return hints.pop() if len(hints) == 1 else None     # only when the datasets agree on one
+
+
 def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None, loop=False,
             mapping="hybrid", key="C", scale=None, harmony="auto", chord_bars=2, bpm=76.0,
             beats_per_bar=4, frames_per_bar=None, add_ending=True, palette="orchestra",
@@ -851,6 +880,9 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
 
     The area is a preset `zone`, a lat/lon `bbox`, or `cells`: a list of [row, col] positions on
     the data array (any shape of area). `cells` wins over `bbox`, which wins over `zone`.
+
+    `maps` can mix datasets (one map per variable): the variables are then lined up by date, and an
+    instrument is silent for the dates its own data does not cover (see _align_by_date).
 
     duration_s: play this many seconds of data starting at `start` (instead of giving `end`).
     As many bars as fit at about `bpm` are taken, then the tempo is nudged so that they last
@@ -893,7 +925,7 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
         raise ComposeError(f"invalid key '{key}'")
 
     # ---- zone mean per frame for every variable
-    series = {}
+    series, full = {}, {}
     files = collect_maps(maps if isinstance(maps, (list, tuple)) else [maps])
     if not files:
         raise ComposeError("no map files found")
@@ -919,15 +951,21 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
         # anomaly vs the seasonal normal, computed on the FULL series before any time window
         _, zsc, _ = comp.seasonal_anomaly(m, times, log=var in comp.SKEWED,
                                           already_anomaly=bool(meta.get("anomaly")))
+        if var in full:
+            raise ComposeError(f"two maps for '{var}' ({full[var]['file']} and {Path(f).name}): give one per variable")
+        full[var] = dict(mean=m, z=zsc, meta=meta, times=times, file=Path(f).name)
+    hint = _align_by_date(full)            # maps from different datasets -> one time axis (no-op for one dataset)
+    for var, d in full.items():
+        m, zsc, meta, times = d["mean"], d["z"], d["meta"], d["times"]
         max_frames = None
         if bars_wanted is not None:        # frames per bar: the request, else the dataset hint (daily data: 7)
-            max_frames = max(1, int(round(bars_wanted * float(frames_per_bar or meta.get("frames_per_bar", 1.0)))))
+            max_frames = max(1, int(round(bars_wanted * float(frames_per_bar or hint or meta.get("frames_per_bar", 1.0)))))
         win = _time_window(times, start, end, max_frames)
         if win is not None:
             m, zsc = m[win], zsc[win]
             times = times[win] if times is not None else None
         if len(m) < 1 or not np.isfinite(m).any():
-            continue
+            continue                       # nothing of this variable in the window: its instrument stays out
         series[var] = dict(mean=m, z=zsc, meta=meta, times=times)
     if not series:
         raise ComposeError("no usable data for this zone / selection")
@@ -935,7 +973,7 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
     ref_var = next((v for v in HARMONY_PRIORITY if v in series), next(iter(series)))
     n_ref = len(series[ref_var]["mean"])
     bpb = int(beats_per_bar)
-    fpb = float(frames_per_bar if frames_per_bar else series[ref_var]["meta"].get("frames_per_bar", 1.0))
+    fpb = float(frames_per_bar if frames_per_bar else hint or series[ref_var]["meta"].get("frames_per_bar", 1.0))
     n_bars = max(1, int(np.ceil(n_ref / fpb)))
     n_beats = n_bars * bpb
     sl = scale_notes(key_pc, scale)

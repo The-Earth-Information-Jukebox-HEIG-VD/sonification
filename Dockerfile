@@ -8,8 +8,9 @@
 # How the pieces fit (see the `deployment` repository):
 #   * the `datasets` image fills a volume with the team's RAW data (precipitation_2000_2026/, temperature_anomaly_1880_2025/),
 #     mounted READ-ONLY at /app/data;
-#   * at start-up backend/serve.py converts those folders, in the background, into the datasets the API serves and keeps
+#   * at start-up backend/serve.py converts those folders, in the background, into one dataset per variable and keeps
 #     them in the cache volume (/app/cache/_datasets). It is done once: later starts only rebuild what changed;
+#   * a request can mix variables freely: each is read from its own dataset and they are lined up by date;
 #   * the API answers immediately; GET /api/health says "preparing_data": true until the datasets are ready.
 
 ARG PYTHON_VERSION=3.12
@@ -81,10 +82,11 @@ COPY --from=sounds /app/soundfonts/ soundfonts/
 #   JUKEBOX_DATA_DIR  : the team's raw folders and/or ready-made <prefix>_<variable>.npz + .json (may be read-only)
 #   JUKEBOX_CACHE_DIR : compositions + the converted datasets (must be writable; a volume keeps them between restarts)
 #   JUKEBOX_PREPARE   : 0 = do not convert raw data at start-up
+#   JUKEBOX_MERGE_DATASETS : 1 = each variable is read from its own dataset and they are lined up by date
 ENV JUKEBOX_DATA_DIR=/app/data \
     JUKEBOX_CACHE_DIR=/app/cache \
     JUKEBOX_CORS=* \
-    JUKEBOX_PREPARE=1 \
+    JUKEBOX_PREPARE=1     JUKEBOX_MERGE_DATASETS=1 \
     PORT=8000 \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
