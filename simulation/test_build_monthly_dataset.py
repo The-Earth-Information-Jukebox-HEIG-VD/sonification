@@ -179,3 +179,53 @@ def test_lightning(tmp_path):
     assert np.isnan(d[0][np.abs(lat) > 55]).all()                              # not observed: no data, not zero
     assert np.allclose(z["intensity"][0][np.abs(lat) < 30], 0.5, atol=2e-3)    # 0.2 / 0.4
 
+
+def fake_co2(folder: Path, months: list[str], lines: bool = True):
+    """co2_<YYYY>_<MM>.npy on the team grid (720 x 1440 float32, ppm): a smooth field (400 ppm at the south pole
+    to 404 at the north pole, + 0.2 ppm per month), with the outline of the source picture left in it when
+    `lines`: 2-pixel-wide lines at 432 ppm with a blurred edge at 415, every 5 deg of longitude over the
+    northern hemisphere (dense, like a continent full of borders), and one line of latitude in the south."""
+    lat = 90 - 0.125 - 0.25 * np.arange(720)
+    for i, m in enumerate(months):
+        a = np.repeat((402 + lat / 45 + 0.2 * i)[:, None], 1440, axis=1).astype(np.float32)
+        if lines:
+            for c in range(10, 1440, 20):
+                a[:360, c - 1], a[:360, c + 2] = 415.0, 415.0
+                a[:360, c: c + 2] = 432.0
+            a[500:502] = 432.0
+        np.save(folder / f"co2_{m.replace('-', '_')}.npy", a)
+
+
+def test_co2_outline_pixels_are_dropped(tmp_path):
+    """Lines of values near the top of the scale (the outline of the source picture) must not reach the dataset."""
+    dirty, clean, out = tmp_path / "dirty", tmp_path / "clean", tmp_path / "out"
+    dirty.mkdir(), clean.mkdir()
+    fake_co2(dirty, ["2010-01", "2010-02"])
+    fake_co2(clean, ["2010-01", "2010-02"], lines=False)
+    assert run("--co2", dirty, "--out", out / "d", "--res", 1).returncode == 0
+    r = run("--co2", clean, "--out", out / "c", "--res", 1)
+    assert r.returncode == 0, r.stderr
+    d = np.load(out / "d" / "real_monthly_2010_2010_co2.npz")["data"]
+    c = np.load(out / "c" / "real_monthly_2010_2010_co2.npz")["data"]
+    md = json.loads((out / "d" / "real_monthly_2010_2010_co2.json").read_text())
+    mc = json.loads((out / "c" / "real_monthly_2010_2010_co2.json").read_text())
+    assert np.isfinite(c).all() and mc["dropped_outline_pixels"]["share_mean_min_max"] == [0.0, 0.0, 0.0]   # clean data is untouched
+    assert 0.08 < md["dropped_outline_pixels"]["share_mean_min_max"][0] < 0.25      # 20% of the north + one line in the south
+    assert np.nanmax(d) < 406 and np.nanmax(np.abs(d - c)) < 0.3                    # what is left is the smooth field
+    assert np.isfinite(d).mean() > 0.85                 # a 1 deg cell is lost only where a line covers all of it
+    assert "outline" in md["source"]
+
+
+def test_drop_overlay_lines_keeps_real_gradients(tmp_path):
+    """A real, smooth difference between regions (here 8 ppm between the hemispheres) is not a line."""
+    sys.path.insert(0, str(HERE))
+    from build_monthly_dataset import drop_overlay_lines
+    a = np.full((720, 1440), 400.0, np.float32)
+    a[:360] = 408.0                                                                 # the block edges follow the equator
+    a[100:102, :] = 430.0                                                           # one line
+    a[300, 700] = np.nan
+    cleaned, n = drop_overlay_lines(a, 0.25)
+    assert n == 4 * 1440 and np.isnan(cleaned[99:103]).all()                        # the line and its two edges
+    assert np.nanmin(cleaned[:360]) == 408 and np.nanmax(cleaned[360:]) == 400      # both hemispheres intact
+    assert np.isnan(cleaned[300, 700]) and a[100, 0] == 430                         # NaN stays NaN; the input is not modified
+

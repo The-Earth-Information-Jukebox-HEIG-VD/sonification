@@ -53,6 +53,7 @@ import calendar
 import glob
 import re
 import json
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -77,8 +78,14 @@ SOURCES = {
                                 source="Monthly surface temperature anomaly (degC), 2 deg map copied onto the team's "
                                        "0.25 deg common grid, extracted by the team (REAL)"),
 }
+# drop_lines: the delivered CO2 maps still carry the outline of the visualization (coasts, borders) as pixels
+# near the top of the colour scale, 10-20 ppm above their neighbours, where real monthly CO2 differs by a few
+# ppm at most. Those pixels are set to NaN (see drop_overlay_lines). A stopgap until the files themselves
+# have them as NaN; it then does nothing.
 SOURCES["co2"] = dict(pattern="co2_*.npy", reader="monthly_npy", factor=1.0, units="ppm", vmin=365.0, vmax=435.0,
-                      source="Monthly CO2 (ppm), 0.5 deg grid, extracted by the team (REAL)")
+                      drop_lines=dict(block_deg=10.0, above=4.5),
+                      source="Monthly CO2 (ppm), extracted by the team (REAL); pixels of the map outline removed "
+                             "(more than 4.5 ppm above the lower quartile of their 10 deg neighbourhood)")
 # share (0-1) of each pixel where the instrument saw lightning in the month. The space station only sees
 # 55S -> 55N: beyond that the files hold 0, which means "not observed", so those rows become NaN (lat_limit).
 # vmax 0.4: over a region the monthly mean is about 0.03 (median) to 0.1 (stormy season), so that range
@@ -107,6 +114,37 @@ def block_mean(stack: np.ndarray, f: int, area: np.ndarray) -> np.ndarray:
         return np.where(den > 0, num / den, np.nan).astype(np.float32)
 
 
+def drop_overlay_lines(a: np.ndarray, step: float, block_deg: float = 10.0, above: float = 4.5):
+    """Set to NaN the pixels that sit far above their surroundings: lines drawn on the source picture.
+
+    The surroundings of a pixel are its block of block_deg x block_deg degrees, summarised by the LOWER
+    QUARTILE of the block: the lines only add high values, so the lower quartile stays the value of the clean
+    pixels even when half of a block is covered by lines. A pixel more than `above` over it is dropped, and so
+    are its 4 direct neighbours (the blurred edge of a line). Returns (cleaned copy, number of pixels dropped)."""
+    a = a.astype(np.float32)
+    n = max(2, int(round(block_deg / step)))
+    h, w = a.shape
+    hh, ww = -(-h // n) * n, -(-w // n) * n
+    p = np.full((hh, ww), np.nan, np.float32)
+    p[:h, :w] = a
+    blocks = p.reshape(hh // n, n, ww // n, n).transpose(0, 2, 1, 3).reshape(hh // n, ww // n, n * n)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)          # blocks without any data
+        low = np.nanpercentile(blocks, 25, axis=2)
+        low = np.where(np.isfinite(low), low, np.nanmedian(a))
+    around = np.repeat(np.repeat(low, n, axis=0), n, axis=1)[:h, :w]
+    with np.errstate(invalid="ignore"):
+        bad = a > around + above
+    grown = bad.copy()
+    grown[1:] |= bad[:-1]
+    grown[:-1] |= bad[1:]
+    grown[:, 1:] |= bad[:, :-1]
+    grown[:, :-1] |= bad[:, 1:]
+    grown &= np.isfinite(a)
+    a[grown] = np.nan
+    return a, int(grown.sum())
+
+
 def read_monthly_npy(folder: Path, spec: dict, res: float, start=None, end=None, pattern=None):
     """One [H, W] .npy per month (name ..._YYYY_MM.npy) -> (months, data [T, H', W'], n_days [T]).
     The input step is 360 / W degrees; the H rows are centred on the equator, north first.
@@ -131,7 +169,7 @@ def read_monthly_npy(folder: Path, spec: dict, res: float, start=None, end=None,
         raise SystemExit(f"--res {res} must be a multiple of the input grid ({step:g} deg)")
     lat = 90 - step / 2 - step * np.arange(full_h)
     area = np.cos(np.deg2rad(lat))[:, None] * np.ones((1, shape[1]))
-    frames = []
+    frames, dropped = [], []
     for i, (month, path) in enumerate(found):
         a = np.load(path, allow_pickle=False)
         if a.shape != shape:
@@ -141,11 +179,19 @@ def read_monthly_npy(folder: Path, spec: dict, res: float, start=None, end=None,
         if spec.get("lat_limit"):                  # not observed beyond this latitude: no data, not zero
             a = a.astype(np.float32)
             a[np.abs(lat) > spec["lat_limit"]] = np.nan
+        if spec.get("drop_lines"):                 # outline of the source picture left in the values
+            valid = int(np.isfinite(a).sum())
+            a, n_dropped = drop_overlay_lines(a, step, **spec["drop_lines"])
+            dropped.append(n_dropped / max(valid, 1))
         frames.append(block_mean(a[None], int(round(f)), area)[0] * np.float32(spec["factor"]))
         if i % 240 == 0 or i == len(found) - 1:
             print(f"  read {Path(path).name} ({i + 1}/{len(found)})", flush=True)
     months = [m for m, _ in found]
     days = [calendar.monthrange(int(m[:4]), int(m[5:7]))[1] for m in months]
+    if dropped:
+        print(f"  outline pixels dropped: {100 * np.mean(dropped):.1f}% of the valid pixels on average "
+              f"({100 * min(dropped):.1f}% .. {100 * max(dropped):.1f}% per month)", flush=True)
+        spec["_dropped_share"] = [round(float(x), 4) for x in (np.mean(dropped), min(dropped), max(dropped))]
     return months, np.stack(frames), days
 
 
@@ -249,6 +295,8 @@ def main():
                 "partial_months": partial}        # months averaged over fewer than 25 days of data
         if spec.get("anomaly"):
             meta["anomaly"] = True                 # values are already anomalies (degC away from a normal)
+        if spec.get("drop_lines"):                 # how the outline pixels were removed, and how many
+            meta["dropped_outline_pixels"] = {**spec["drop_lines"], "share_mean_min_max": spec.get("_dropped_share")}
         if a.frames_per_bar:
             meta["frames_per_bar"] = a.frames_per_bar
         intensity = np.clip((data - vmin) / (vmax - vmin), 0, 1).astype(np.float16)     # float16: halves the size

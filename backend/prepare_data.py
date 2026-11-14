@@ -7,6 +7,7 @@ In the deployment the `datasets` image fills a read-only volume with the extract
     <raw>/precipitation_2000_2026/precipitation_<YYYY>_<MM>.npy      (or precipitation_monthly_<YYYY>.npz)
     <raw>/temperature_anomaly_1880_2025/temperature_anomaly_<YYYY>_<MM>.npy
     <raw>/lightning_2017_2023/lightning_<YYYY>_<MM>.npy
+    <raw>/co2_2002_2022/co2_<YYYY>_<MM>.npy
 
 The API reads `<prefix>_<variable>.npz + .json` (simulation/INTENSITY_MAP_SPEC.md), so this script runs
 simulation/build_monthly_dataset.py on the folders it finds and writes the result to a folder the API
@@ -44,6 +45,7 @@ INPUTS = {
     "precip": [f"precipitation_{MONTH}.npy", "precipitation_monthly_*.npz"],     # one file per month, or per year
     "temperature": [f"temperature_anomaly_{MONTH}.npy"],
     "lightning": [f"lightning_{MONTH}.npy"],
+    "co2": [f"co2_{MONTH}.npy"],
 }
 
 
@@ -59,10 +61,12 @@ RECIPES = [
     # One dataset per variable, with every month the team has for it; one bar = one month in all of them.
     # The API (JUKEBOX_MERGE_DATASETS=1 in the Docker image) takes each requested variable from its own
     # dataset and the composer lines them up by date, so no combined dataset has to be built: temperature
-    # can start in 1880, with precipitation joining in 2000 and lightning in 2017.
+    # can start in 1880, with precipitation joining in 2000, CO2 in 2002 and lightning in 2017.
     dict(name="temperature history", prefix="real_temperature", needs=["temperature"], args=["--res", "2"]),
     dict(name="precipitation", prefix="real_precipitation", needs=["precip"], args=["--res", "1"]),
     dict(name="lightning", prefix="real_lightning", needs=["lightning"], args=["--res", "1"]),
+    # the converter removes the outline of the source picture that is still in the delivered CO2 values
+    dict(name="co2", prefix="real_co2", needs=["co2"], args=["--res", "1"]),
 ]
 
 
