@@ -230,7 +230,10 @@ def save_wav(x, sr, path):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("midi", nargs="+")
+    ap.add_argument("midi", nargs="*")
+    ap.add_argument("--download", action="store_true",
+                    help="only fetch the SoundFont (~32 MB) and exit; do it once before starting the server, "
+                         "otherwise the first audio request has to wait for it")
     ap.add_argument("--sf2", default=str(DEFAULT_SF2))
     ap.add_argument("--reverb", type=float, default=0.28, help="0 = dry, 0.5 = very wet")
     ap.add_argument("--sr", type=int, default=44100)
@@ -238,7 +241,11 @@ def main():
     ap.add_argument("--engine", choices=["auto", "vsco", "sf2"], default="auto",
                     help="auto: VSCO 2 CE orchestral samples where available, SoundFont for the rest")
     a = ap.parse_args()
+    if not a.midi and not a.download:
+        ap.error("give MIDI files to render, or --download")
     sf2 = ensure_soundfont(Path(a.sf2))
+    if a.download:
+        print(f"SoundFont ready: {sf2}")
     for m in a.midi:
         x, sr = render(m, sf2, a.sr, a.reverb, engine=a.engine)
         out = Path(a.out) if a.out and len(a.midi) == 1 else Path(m).with_suffix(".wav")

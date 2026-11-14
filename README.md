@@ -18,6 +18,7 @@ pip install -r requirements.txt
 python simulation/build_daily_dataset.py --precip precipitation_pixels_2024-01-01_2024-12-31.npz   # REAL daily 2024 (default)
 python simulation/build_realistic_dataset.py   # REAL monthly NASA GISTEMP + NOAA CO2 (2015 -> today)
 pip install --no-deps tinysoundfont          # audio rendering
+python music/render_audio.py --download      # fetch the SoundFont once (~32 MB), so the first audio request does not wait
 python music/sampler.py --download           # real orchestral samples (VSCO 2 CE, CC0, ~440 MB, once)
 python music/orchestra.py simulation/output/real_daily_2024_ --zone switzerland --render --mp3
 ```

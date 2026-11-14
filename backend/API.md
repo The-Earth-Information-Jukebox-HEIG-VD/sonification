@@ -9,6 +9,7 @@ Backend for the Earth Information Jukebox. The frontend sends **what to listen t
 ## Run it
 ```bash
 pip install -r requirements.txt && pip install --no-deps tinysoundfont
+python music/render_audio.py --download   # fetch the SoundFont once (~32 MB); otherwise the first audio request waits for it
 python music/sampler.py --download        # optional: real orchestral samples (VSCO 2 CE, ~440 MB, once)
 pip install netCDF4 && python simulation/build_realistic_dataset.py     # real NASA/NOAA data (default)
 python simulation/simulate_variables.py --scenario both --warming 0.5 --years 2 --frames 24   # simulated demo data
@@ -152,31 +153,37 @@ All fields are optional. The smallest request is `{}` (global zone, default data
 ### Response
 ```json
 {
-  "id": "195820c264227acb",
+  "id": "8f104320be01425f",
   "cached": false,
-  "elapsed_s": 2.64,
+  "elapsed_s": 3.996,
   "request": {
     "dataset": "sim_both_24f_1deg",
     "zone": "switzerland",
     "bbox": null,
+    "n_cells": null,
+    "start": null,
+    "duration_s": null,
     "palette": "orchestra",
     "key": "C",
     "scale": null,
     "bpm": 76,
+    "style": "data",
     "audio": true,
     "audio_format": "mp3"
   },
   "files": {
-    "midi": "http://localhost:8000/api/files/195820c264227acb/score.mid",
+    "midi": "http://localhost:8000/api/files/8f104320be01425f/score.mid",
     "score_json": "…",
     "stems": {
-      "co2": "http://localhost:8000/api/files/195820c264227acb/score_stems/co2.mid",
+      "aerosol_dust": "http://localhost:8000/api/files/8f104320be01425f/score_stems/aerosol_dust.mid",
       "…": "…"
     },
-    "audio": "http://localhost:8000/api/files/195820c264227acb/score.mp3",
+    "audio": "http://localhost:8000/api/files/8f104320be01425f/score.mp3",
     "score_image": null
   },
   "score": {
+    "style": "data",
+    "quantize": "scale",
     "zone": "switzerland",
     "bbox": [
       45.8,
@@ -184,48 +191,74 @@ All fields are optional. The smallest request is `{}` (global zone, default data
       5.9,
       10.5
     ],
+    "cells": null,
     "surface": "all",
     "palette": "orchestra",
     "key": "C",
     "scale": "major",
     "bpm": 76,
     "beats_per_bar": 4,
+    "frames_per_bar": 1.0,
     "n_bars": 24,
-    "total_beats": 104,
-    "duration_s": 82.11,
+    "intro_bars": 0,
+    "total_beats": 96,
+    "duration_s": 75.79,
+    "tempo_map": [
+      {
+        "beat": 0.0,
+        "bpm": 76
+      }
+    ],
     "time_start": "2024-01-15T00:00:00Z",
     "time_end": "2025-12-15T01:30:00Z",
+    "time_last_frame": "2025-12-15T01:30:00Z",
     "harmony_source": "co2",
+    "sections": [
+      {
+        "name": "data",
+        "start_bar": 0,
+        "bars": 24,
+        "start_s": 0.0
+      }
+    ],
     "bars": [
       {
         "index": 0,
         "start_beat": 0,
+        "start_s": 0.0,
         "time": "2024-01-15T00:00:00Z",
-        "chord": "Am"
+        "chord": null,
+        "tension": 0.249,
+        "mode": null,
+        "climax": false
       },
       {
         "index": 1,
         "start_beat": 4,
+        "start_s": 3.158,
         "time": "2024-02-14T10:30:00Z",
-        "chord": "Am"
+        "chord": null,
+        "tension": 0.224,
+        "mode": null,
+        "climax": false
       },
       "…"
     ],
     "instruments": {
       "surface_temperature": {
         "name": "Temperature - Piano (chords)",
-        "role": "melody",
-        "program": 49,
+        "role": "harmony",
+        "program": 0,
         "channel": 0,
-        "pan": 40,
+        "pan": 64,
         "register": [
-          67,
-          91
+          48,
+          72
         ],
         "units": "degC",
-        "bars_playing": 24,
+        "source": "SIMULATED (simulate_variables.py)",
         "values_per_beat": [
-          -0.0225,
+          -0.0226,
           -0.0547,
           -0.0869,
           -0.1191,
@@ -238,25 +271,41 @@ All fields are optional. The smallest request is `{}` (global zone, default data
           0.499,
           "…"
         ],
-        "levels_per_bar": [
-          1,
-          1,
-          1,
-          1,
+        "pitch_range": [
+          48,
+          79
+        ],
+        "anomaly_z_per_bar": [
+          -1.0,
+          -0.8,
+          -0.45,
+          -0.27,
           "…"
         ],
+        "levels_per_bar": [
+          2,
+          2,
+          2,
+          2,
+          "…"
+        ],
+        "bars_playing": 24,
         "notes": [
           {
-            "pitch": 69,
+            "pitch": 48,
             "start": 0.0,
-            "duration": 0.97,
-            "velocity": 66
+            "duration": 0.9,
+            "velocity": 50,
+            "time_s": 0.0,
+            "duration_s": 0.7105
           },
           {
-            "pitch": 67,
+            "pitch": 48,
             "start": 1.0,
-            "duration": 0.97,
-            "velocity": 59
+            "duration": 0.9,
+            "velocity": 41,
+            "time_s": 0.7895,
+            "duration_s": 0.7105
           },
           "…"
         ]
@@ -264,9 +313,11 @@ All fields are optional. The smallest request is `{}` (global zone, default data
       "…": "…"
     },
     "stats": {
-      "notes_total": 192,
-      "polyphony_mean": 3.45,
-      "polyphony_max": 7
+      "notes_total": 547,
+      "polyphony_mean": 4.4,
+      "polyphony_max": 7,
+      "tense_bars": 2,
+      "max_tension": 0.675
     }
   }
 }

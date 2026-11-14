@@ -15,7 +15,6 @@ TENSION_WEIGHTS = {
     "surface_temperature": (1.0, "abs"),
     "precipitation": (0.5, "abs"),
     "snowfall": (0.4, "pos"),
-    "snowfall": (0.4, "pos"),
     "aerosol_smoke": (0.7, "pos"),
     "lightning": (0.5, "pos"),
     "aerosol_dust": (0.5, "pos"),

@@ -16,7 +16,6 @@ Arranged "like a conductor":
     melody   C5..A6       aerosol_dust         Flute                   pitch = value while dust is present
     melody   F3..D5       aerosol_smoke        French horns            pitch = value while smoke is present
     sparkle  F5..F7       lightning            Xylophone               hits per beat = flash density, pitch = value
-    sparkle  G5..G7       snowfall             Glockenspiel            gentle hits per beat = amount of snow
     harmony  C3..C5       surface_temperature  Piano (chords)          chord every beat, root = value / comping
     bass     E1..D3       co2                  Contrabass              pitch = value / one root per bar
 
@@ -72,9 +71,6 @@ ORCHESTRA = {
                                 low=72, high=93, gain=4.0, gate=0.12, levels=[0.45, 0.75], level=0.85, pan=24),
     "aerosol_smoke":       dict(name="Smoke - French Horns (melody)", role="melody", program=60, channel=3,
                                 low=53, high=74, gain=4.0, gate=0.12, levels=[0.60], level=0.85, pan=96),
-    "snowfall":            dict(name="Snow - Glockenspiel", role="timpani", program=9, channel=6,
-                                low=79, high=103, gain=6.0, gate=0.08, levels=[0.35, 0.60, 0.85], level=0.65, pan=20,
-                                max_hits=3),        # gentle sparkles: hits per beat = amount of snow
     "snowfall":            dict(name="Snow - Glockenspiel (melody)", role="melody", program=9, channel=6,
                                 low=67, high=88, gain=8.0, gate=0.06, levels=[0.35, 0.65], level=1.0, pan=16,
                                 restrike=True),   # sounds an octave higher; percussive -> re-struck every beat

@@ -262,19 +262,6 @@ def test_data_style_follows_the_data():
         assert all(n["pitch"] in (81, 77) for n in m["notes"])
 
 
-def test_real_precipitation_2024():
-    ds = {d["id"]: d for d in client.get("/api/datasets").json()["datasets"]}
-    if "real_2024_weekly" not in ds:
-        print("skip: python simulation/build_2024_dataset.py"); return
-    assert {"precipitation", "snowfall"} <= set(ds["real_2024_weekly"]["real_variables"])
-    s = client.post("/api/compose", json={"dataset": "real_2024_weekly", "zone": "india", "audio": False}).json()["score"]
-    rain = s["instruments"]["precipitation"]["levels_per_bar"]
-    assert sum(rain[:16]) < sum(rain[24:40])              # dry first months, monsoon June-September
-    sw = client.post("/api/compose", json={"dataset": "real_2024_weekly", "zone": "switzerland", "audio": False}).json()["score"]
-    snow = sw["instruments"]["snowfall"]["levels_per_bar"]
-    assert sum(snow[:12]) > 0 and sum(snow[24:36]) == 0     # snow in winter, none in summer
-
-
 def test_real_daily_precipitation():
     if not DAILY:
         print("skip: no daily dataset (python simulation/build_daily_dataset.py --precip FILE)"); return

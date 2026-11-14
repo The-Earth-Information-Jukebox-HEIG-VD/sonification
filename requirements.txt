@@ -5,5 +5,10 @@ fastapi
 uvicorn
 netCDF4
 soundfile
-# audio rendering: pip install --no-deps tinysoundfont   (ffmpeg needed for MP3)
-# tests: pip install httpx pytest
+# tests (backend/test_api.py)
+httpx
+pytest
+# Audio rendering is installed separately, because tinysoundfont would otherwise pull in pyaudio:
+#   pip install --no-deps tinysoundfont
+#   python music/render_audio.py --download     (fetches the SoundFont once, ~32 MB)
+# MP3 output also needs ffmpeg on the PATH.
