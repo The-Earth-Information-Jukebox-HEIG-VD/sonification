@@ -30,17 +30,31 @@ GM_TO_VSCO = {
     73: "FluteSusVib.sfz",          # dust melody
     60: "FHornSus.sfz",             # smoke melody
     13: "Xylophone.sfz",            # lightning
+    9: "Glockenspiel.sfz",          # snow
 }
 SHORT_NOTE_ALT = {48: ("ViolinEnsTrem.sfz", 0.35)}   # notes shorter than 0.35 s -> tremolo samples
-TUNE_CENTS = {"Xylophone.sfz": -15}   # measured: the xylophone recordings are ~15 cents sharp
+TUNE_CENTS = {"Xylophone.sfz": -15, "Glockenspiel.sfz": -15}   # measured: these recordings are ~15 cents sharp
 SUSTAINED = {"ViolinEnsSusVib.sfz", "ViolinEnsTrem.sfz", "ContrabassSusVB.sfz", "FluteSusVib.sfz", "FHornSus.sfz"}
 
 
 # ----------------------------------------------------------------------------
 # Download (sparse: only the samples our instruments reference, ~440 MB)
 # ----------------------------------------------------------------------------
+def _needed_sfz():
+    return set(GM_TO_VSCO.values()) | {SHORT_NOTE_ALT[48][0]}
+
+
 def vsco_available() -> bool:
-    return all((VSCO_DIR / f).exists() for f in set(GM_TO_VSCO.values()) | {SHORT_NOTE_ALT[48][0]})
+    """True when every instrument definition AND every sample it references is on disk."""
+    try:
+        for f in _needed_sfz():
+            if not (VSCO_DIR / f).exists():
+                return False
+            if not all(r["path"].exists() for r in instrument(f).regions):
+                return False
+        return True
+    except Exception:
+        return False
 
 
 def ensure_vsco(verbose=True) -> bool:
@@ -56,7 +70,8 @@ def ensure_vsco(verbose=True) -> bool:
                             "-b", "SFZ", VSCO_REPO, str(VSCO_DIR)], check=True)
         subprocess.run(["git", "-C", str(VSCO_DIR), "sparse-checkout", "set", "--no-cone", "/*.sfz"], check=True)
         subprocess.run(["git", "-C", str(VSCO_DIR), "checkout", "-q"], check=True)
-        files = set(GM_TO_VSCO.values()) | {SHORT_NOTE_ALT[48][0]}
+        files = _needed_sfz()
+        instrument.cache_clear()
         paths = ["/*.sfz"]
         for f in files:
             inst = SfzInstrument(VSCO_DIR / f, load=False)
@@ -66,6 +81,7 @@ def ensure_vsco(verbose=True) -> bool:
         subprocess.run(["git", "-C", str(VSCO_DIR), "sparse-checkout", "set", "--no-cone", "--stdin"],
                        input="\n".join(paths), text=True, check=True)
         subprocess.run(["git", "-C", str(VSCO_DIR), "checkout", "-q"], check=True)
+        instrument.cache_clear()
         return vsco_available()
     except Exception as e:  # network / git missing -> caller falls back to the SoundFont
         if verbose:

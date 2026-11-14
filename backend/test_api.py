@@ -12,6 +12,9 @@ from fastapi.testclient import TestClient  # noqa: E402
 from backend.app import app  # noqa: E402
 
 client = TestClient(app)
+_ds = {d["id"]: d for d in client.get("/api/datasets").json()["datasets"]}
+MONTHLY = next((k for k in _ds if k.startswith("real_20") and _ds[k]["frames"] > 100), None) or "sim_both_24f_1deg"
+DAILY = next((k for k in _ds if k.startswith("real_daily")), None)
 
 
 def test_health():
@@ -29,7 +32,7 @@ def test_options_and_datasets():
 
 
 def test_compose_zone_with_audio_and_cache():
-    body = {"zone": "india", "start": "2022-01", "end": "2023-12", "audio": True, "audio_format": "mp3"}
+    body = {"zone": "india", "start": "2024-05", "end": "2024-09", "audio": True, "audio_format": "mp3"}
     t = time.perf_counter()
     r = client.post("/api/compose", json=body)
     first = time.perf_counter() - t
@@ -117,10 +120,11 @@ def test_compose_cells_instead_of_bbox():
 
 def test_real_dataset_tension_and_form():
     ds = client.get("/api/datasets").json()
-    real = [d for d in ds["datasets"] if not d["simulated"]]
+    real = [d for d in ds["datasets"] if d["id"].startswith("real_2015")]
     if not real:
-        print("skip: no real dataset (python simulation/build_realistic_dataset.py)"); return
-    assert ds["default"] == real[0]["id"]
+        print("skip: no real monthly dataset (python simulation/build_realistic_dataset.py)"); return
+    best = max(ds["datasets"], key=lambda d: (len(d["real_variables"]), len(d["variables"]), d["frames"]))
+    assert ds["default"] == best["id"]
     r = client.post("/api/compose", json={"dataset": real[0]["id"], "zone": "switzerland", "style": "musical",
                                           "start": "2022-01", "end": "2024-12", "audio": False})
     assert r.status_code == 200, r.text
@@ -142,7 +146,9 @@ def test_real_dataset_tension_and_form():
 
 def test_data_style_follows_the_data():
     import numpy as np
-    r = client.post("/api/compose", json={"zone": "switzerland", "start": "2022-01", "end": "2024-12", "audio": False})
+    monthly = [d["id"] for d in client.get("/api/datasets").json()["datasets"] if d["id"].startswith("real_2015")]
+    r = client.post("/api/compose", json={"zone": "switzerland", "start": "2022-01", "end": "2024-12", "audio": False,
+                                          **({"dataset": monthly[0]} if monthly else {})})
     assert r.status_code == 200, r.text
     s = r.json()["score"]
     assert s["style"] == "data" and s["intro_bars"] == 0 and all(b["chord"] is None for b in s["bars"])
@@ -162,6 +168,38 @@ def test_data_style_follows_the_data():
         assert all(n["pitch"] in (81, 77) for n in m["notes"])
 
 
+def test_real_precipitation_2024():
+    ds = {d["id"]: d for d in client.get("/api/datasets").json()["datasets"]}
+    if "real_2024_weekly" not in ds:
+        print("skip: python simulation/build_2024_dataset.py"); return
+    assert {"precipitation", "snowfall"} <= set(ds["real_2024_weekly"]["real_variables"])
+    s = client.post("/api/compose", json={"dataset": "real_2024_weekly", "zone": "india", "audio": False}).json()["score"]
+    rain = s["instruments"]["precipitation"]["levels_per_bar"]
+    assert sum(rain[:16]) < sum(rain[24:40])              # dry first months, monsoon June-September
+    sw = client.post("/api/compose", json={"dataset": "real_2024_weekly", "zone": "switzerland", "audio": False}).json()["score"]
+    snow = sw["instruments"]["snowfall"]["levels_per_bar"]
+    assert sum(snow[:12]) > 0 and sum(snow[24:36]) == 0     # snow in winter, none in summer
+
+
+def test_real_daily_precipitation():
+    if not DAILY:
+        print("skip: no daily dataset (python simulation/build_daily_dataset.py --precip FILE)"); return
+    assert client.get("/api/datasets").json()["default"] == DAILY        # most real variables
+    r = client.post("/api/compose", json={"dataset": DAILY, "bbox": [38.5, 40.5, -1.5, 0.5], "audio": False})
+    assert r.status_code == 200, r.text
+    s = r.json()["score"]
+    assert s["frames_per_bar"] == 7 and s["n_bars"] == 53                  # one bar per week
+    rain = s["instruments"]["precipitation"]
+    vals = [v or 0 for v in rain["values_per_beat"]]
+    wettest = max(range(len(vals)), key=vals.__getitem__)
+    assert s["bars"][wettest // s["beats_per_bar"]]["time"].startswith("2024-10"), "Valencia flood (Oct 2024)"
+    assert any(int(n["start"]) == wettest for n in rain["notes"])
+    ch = client.post("/api/compose", json={"dataset": DAILY, "zone": "switzerland", "audio": False}).json()["score"]
+    snow_bars = {int(n["start"]) // 4 for n in ch["instruments"]["snowfall"]["notes"]}
+    months = {ch["bars"][b]["time"][5:7] for b in snow_bars}
+    assert months & {"01", "02", "12"} and not months & {"07", "08"}        # snow in winter, not summer
+
+
 def test_regional_palette():
     r = client.post("/api/compose", json={"dataset": "sim_both_24f_1deg", "zone": "japan", "palette": "auto",
                                           "style": "musical", "audio": False})
@@ -178,7 +216,7 @@ def test_errors():
     assert client.post("/api/compose", json={"cells": [[99999, 0]], "audio": False}).status_code == 400   # outside the array
     assert client.post("/api/compose", json={"dataset": "nope"}).status_code == 404
     assert client.post("/api/compose", json={"zone": "india", "variables": ["unicorns"]}).status_code == 400
-    assert client.post("/api/compose", json={"zone": "india", "start": "1990", "end": "1991"}).status_code == 400
+    assert client.post("/api/compose", json={"dataset": MONTHLY, "zone": "india", "start": "1990", "end": "1991"}).status_code == 400
     assert client.get("/api/files/abc/../../etc/passwd").status_code == 404
 
 

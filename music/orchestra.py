@@ -12,9 +12,11 @@ Arranged "like a conductor":
     voice                 variable             instrument              data style / musical style
     -------------------   ------------------   ---------------------   ------------------------------------
     melody   G4..G6       precipitation        Violins                 pitch = value, tremolo when heavy / gated legato line
+    melody   G4..E6 (8va) snowfall             Glockenspiel            pitch = value while it snows
     melody   C5..A6       aerosol_dust         Flute                   pitch = value while dust is present
     melody   F3..D5       aerosol_smoke        French horns            pitch = value while smoke is present
     sparkle  F5..F7       lightning            Xylophone               hits per beat = flash density, pitch = value
+    sparkle  G5..G7       snowfall             Glockenspiel            gentle hits per beat = amount of snow
     harmony  C3..C5       surface_temperature  Piano (chords)          chord every beat, root = value / comping
     bass     E1..D3       co2                  Contrabass              pitch = value / one root per bar
 
@@ -57,7 +59,7 @@ SEVEN_NOTE_SCALES = [k for k, v in SCALES.items() if len(v) == 7]
 ORCHESTRA = {
     # always present -> the foundation: harmony (piano chords) and bass
     "surface_temperature": dict(name="Temperature - Piano (chords)", role="harmony", program=0, channel=0,
-                                low=48, high=72, gain=1.0, gate=0.0, levels=[0.45, 0.75], level=0.80, pan=64,
+                                low=48, high=72, gain=1.0, gate=0.0, levels=[0.45, 0.75], level=0.65, pan=64,
                                 always_on=True),
     "co2":                 dict(name="CO2 - Contrabass", role="bass", program=43, channel=5,
                                 low=28, high=50, gain=1.0, gate=0.0, levels=[], level=0.90, pan=78,
@@ -70,6 +72,12 @@ ORCHESTRA = {
                                 low=72, high=93, gain=4.0, gate=0.12, levels=[0.45, 0.75], level=0.85, pan=24),
     "aerosol_smoke":       dict(name="Smoke - French Horns (melody)", role="melody", program=60, channel=3,
                                 low=53, high=74, gain=4.0, gate=0.12, levels=[0.60], level=0.85, pan=96),
+    "snowfall":            dict(name="Snow - Glockenspiel", role="timpani", program=9, channel=6,
+                                low=79, high=103, gain=6.0, gate=0.08, levels=[0.35, 0.60, 0.85], level=0.65, pan=20,
+                                max_hits=3),        # gentle sparkles: hits per beat = amount of snow
+    "snowfall":            dict(name="Snow - Glockenspiel (melody)", role="melody", program=9, channel=6,
+                                low=67, high=88, gain=8.0, gate=0.06, levels=[0.35, 0.65], level=1.0, pan=16,
+                                restrike=True),   # sounds an octave higher; percussive -> re-struck every beat
     "lightning":           dict(name="Lightning - Xylophone", role="timpani", program=13, channel=4,
                                 low=77, high=101, gain=3.0, gate=0.08, levels=[0.35, 0.60, 0.85], level=0.75, pan=104),
 }
@@ -184,8 +192,21 @@ def collect_maps(paths):
 
 
 def sample_beats(series, n_ref, n_beats, fpb, bpb, loop, smooth):
-    """Value of a per-frame series at every beat (time measured in the reference's frames)."""
+    """Value of a per-frame series at every beat (time measured in the reference's frames).
+    When a beat covers several frames (e.g. daily data, one bar per week), the beat gets the MEAN of
+    its frames, so no day is skipped."""
     n = len(series)
+    step = fpb / bpb * (n / n_ref)                               # frames of this series per beat
+    if step > 1.0 + 1e-9 and not loop:
+        out = np.full(n_beats, np.nan)
+        x = np.asarray(series, dtype=float)
+        for k in range(n_beats):
+            a, b = int(round(k * step)), int(round((k + 1) * step))
+            seg = x[a:max(b, a + 1)]
+            seg = seg[np.isfinite(seg)]
+            if len(seg):
+                out[k] = seg.mean()
+        return out
     pos = np.arange(n_beats) * fpb / bpb                       # in reference frames
     if loop:
         pos = (pos * n / n_ref) % n
@@ -565,13 +586,13 @@ def data_melody_intermittent(cfg, c):
         if not np.isfinite(nv) or not np.isfinite(pr) or pr < cfg["gate"]:
             cur = None; continue
         p = _pitch(nv, grid)
-        vel = cfg["level"] * (50 + 75 * pr)
+        vel = cfg["level"] * (68 + 59 * pr)        # present = clearly audible; louder with more
         n = 1 + int(round(pr * (trem - 1))) if trem > 1 else 1
         if n > 1:
             for k in range(n):
                 notes.append([p, i + k / n, 0.95 / n, vel * (1.0 if k == 0 else 0.85)])
             cur = None; continue
-        if cur is not None and cur[0] == p and cur[1] + cur[2] >= i - 1e-9:
+        if not cfg.get("restrike") and cur is not None and cur[0] == p and cur[1] + cur[2] >= i - 1e-9:
             cur[2] += 1; continue
         cur = [p, i, 1, vel]
         notes.append(cur)
@@ -819,7 +840,7 @@ def _time_window(times, start, end):
 
 def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None, loop=False,
             mapping="hybrid", key="C", scale=None, harmony="auto", chord_bars=2, bpm=76.0,
-            beats_per_bar=4, frames_per_bar=1.0, add_ending=True, palette="orchestra",
+            beats_per_bar=4, frames_per_bar=None, add_ending=True, palette="orchestra",
             only=None, exclude=None, seed=7, out_dir=None, name=None,
             preview=False, render=False, reverb=0.28, audio_format="wav", verbose=False,
             intro=True, tension=True, climax=True, humanize=0.5,
@@ -899,7 +920,8 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
 
     ref_var = next((v for v in HARMONY_PRIORITY if v in series), next(iter(series)))
     n_ref = len(series[ref_var]["mean"])
-    bpb, fpb = int(beats_per_bar), float(frames_per_bar)
+    bpb = int(beats_per_bar)
+    fpb = float(frames_per_bar if frames_per_bar else series[ref_var]["meta"].get("frames_per_bar", 1.0))
     n_bars = max(1, int(np.ceil(n_ref / fpb)))
     n_beats = n_bars * bpb
     sl = scale_notes(key_pc, scale)
@@ -1093,7 +1115,7 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
     doc = {
         "style": style, "quantize": quantize,
         "zone": zone_label, "bbox": list(bbox), "cells": n_cells, "surface": surface, "palette": pal_name,
-        "key": key, "scale": scale, "bpm": bpm, "beats_per_bar": bpb,
+        "key": key, "scale": scale, "bpm": bpm, "beats_per_bar": bpb, "frames_per_bar": fpb,
         "n_bars": n_bars, "intro_bars": intro_bars, "total_beats": total_beats,
         "duration_s": round(b2s(total_beats), 2),
         "tempo_map": [{"beat": tb, "bpm": round(tp, 2)} for tb, tp in tmap],
@@ -1188,7 +1210,8 @@ def main():
     ap.add_argument("--chord-bars", type=int, default=2, help="harmonic rhythm: bars per chord")
     ap.add_argument("--bpm", type=float, default=76)
     ap.add_argument("--beats-per-bar", type=int, default=4)
-    ap.add_argument("--frames-per-bar", type=float, default=1.0, help="1 = one frame per bar; 0.5 = two bars per frame")
+    ap.add_argument("--frames-per-bar", type=float, default=None,
+                    help="data frames per bar (default: dataset hint, e.g. 7 for daily data = one bar per week; else 1)")
     ap.add_argument("--no-ending", action="store_true")
     ap.add_argument("--palette", default="orchestra",
                     help="instrument set: orchestra (default), auto (regional instruments for the zone), "

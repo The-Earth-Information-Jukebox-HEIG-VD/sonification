@@ -39,7 +39,7 @@ from zone_to_midi import ZONES  # noqa: E402
 DATA_DIR = Path(os.environ.get("JUKEBOX_DATA_DIR", ROOT / "simulation" / "output"))
 CACHE_DIR = Path(os.environ.get("JUKEBOX_CACHE_DIR", ROOT / "backend" / "cache"))
 CORS = [o.strip() for o in os.environ.get("JUKEBOX_CORS", "*").split(",")]
-API_VERSION = "1.4"
+API_VERSION = "1.5"
 
 app = FastAPI(title="Earth Information Jukebox: sonification API", version=API_VERSION,
               description="Turns NASA EIC intensity maps into an orchestra (MIDI + audio).")
@@ -79,7 +79,8 @@ def scan_datasets() -> dict:
         g["variables"][var]["real"] = bool(meta.get("real", False))
         g["resolution_deg"] = meta.get("resolution_deg")
     for g in groups.values():
-        g["simulated"] = not any(v.get("real") for v in g["variables"].values())
+        g["real_variables"] = sorted(v for v, info in g["variables"].items() if info.get("real"))
+        g["simulated"] = not g["real_variables"]
         t = g.get("times") or []
         g["frames"] = len(t)
         g["time_start"], g["time_end"] = (t[0], t[-1]) if t else (None, None)
@@ -95,8 +96,8 @@ def default_dataset() -> Optional[str]:
     ds = scan_datasets()
     if not ds:
         return None
-    real = [k for k, g in ds.items() if not g["simulated"]]
-    return (real or sorted(ds, key=lambda k: -len(ds[k]["variables"])))[0]
+    # prefer the dataset with the most REAL variables (then the most variables, then the most frames)
+    return max(ds, key=lambda k: (len(ds[k].get("real_variables", [])), len(ds[k]["variables"]), ds[k]["frames"]))
 
 
 # ----------------------------------------------------------------------------
@@ -118,6 +119,8 @@ class ComposeRequest(BaseModel):
     key: str = Field("C", description="tonic, e.g. C, D, F#, Bb")
     scale: Optional[Literal["major", "minor", "dorian", "lydian", "harmonic_minor"]] = None
     bpm: float = Field(76, ge=30, le=200)
+    frames_per_bar: Optional[float] = Field(None, gt=0, le=60, description="data frames per bar; default = dataset hint "
+                                            "(daily data: 7 = one bar per week; monthly: 1)")
     mapping: Literal["hybrid", "relative", "absolute"] = "hybrid"
     loop: bool = False
     audio: bool = Field(True, description="render audio with sampled instruments")
@@ -299,6 +302,7 @@ def compose(req: ComposeRequest, request: Request):
                 bbox=None if req.cells else req.bbox, cells=req.cells, cells_grid=req.cells_grid if req.cells else None,
                 surface=req.surface, start=start, end=end, loop=req.loop, mapping=req.mapping,
                 key=req.key, scale=req.scale, bpm=req.bpm, palette=req.palette, only=req.variables,
+                frames_per_bar=req.frames_per_bar,
                 out_dir=folder, name="score", preview=req.score_image, render=req.audio,
                 reverb=req.reverb, audio_format=req.audio_format,
                 intro=req.intro, tension=req.tension, climax=req.climax, humanize=req.humanize,

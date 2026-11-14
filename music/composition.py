@@ -14,6 +14,8 @@ import numpy as np
 TENSION_WEIGHTS = {
     "surface_temperature": (1.0, "abs"),
     "precipitation": (0.5, "abs"),
+    "snowfall": (0.4, "pos"),
+    "snowfall": (0.4, "pos"),
     "aerosol_smoke": (0.7, "pos"),
     "lightning": (0.5, "pos"),
     "aerosol_dust": (0.5, "pos"),
@@ -34,7 +36,7 @@ def frames_per_year(times, default=12.0) -> float:
         return default
 
 
-SKEWED = {"precipitation", "lightning", "aerosol_smoke", "aerosol_dust"}   # analysed in log space
+SKEWED = {"precipitation", "snowfall", "lightning", "aerosol_smoke", "aerosol_dust"}   # analysed in log space
 
 
 def seasonal_anomaly(series: np.ndarray, times=None, reference_years: float = 3.0, log: bool = False):

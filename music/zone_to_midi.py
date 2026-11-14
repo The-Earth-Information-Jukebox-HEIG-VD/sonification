@@ -86,6 +86,7 @@ INSTRUMENTS = {   # same instruments as orchestra.py
     "aerosol_dust":        {"program": 73, "channel": 2, "name": "Dust - Flute"},
     "aerosol_smoke":       {"program": 60, "channel": 3, "name": "Smoke - French Horns"},
     "lightning":           {"program": 13, "channel": 4, "name": "Lightning - Xylophone"},
+    "snowfall":            {"program": 9,  "channel": 6, "name": "Snow - Glockenspiel"},
     "co2":                 {"program": 43, "channel": 5, "name": "CO2 - Contrabass"},
 }
 

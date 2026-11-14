@@ -7,3 +7,4 @@ soundfonts/_gugs/
 backend/cache/
 simulation/raw/
 soundfonts/vsco/
+/*.npz

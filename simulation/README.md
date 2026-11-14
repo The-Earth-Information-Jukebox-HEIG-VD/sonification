@@ -66,4 +66,20 @@ python simulation/build_realistic_dataset.py            # Jan 2015 .. latest mon
 
 Raw files download automatically into `simulation/raw/` (not committed). Output: `output/real_<start>_<end>_1deg_<variable>.npz`, and each `.json` says which variables are real (`"real": true`). The backend prefers this dataset when present. Checks: global yearly anomalies match NASA's (2024 = +1.29 °C); Zurich Jun 2019 +4.1 °C; El Niño Dec 2015 +3.0 °C.
 
+## Daily dataset around the team's REAL precipitation: `build_daily_dataset.py`
+```bash
+python simulation/build_daily_dataset.py --precip precipitation_pixels_2024-01-01_2024-12-31.npz
+```
+Input: the extraction team's file (daily, 0.25°, `precip_mmh`, `is_snow`, `dates`, `lat`, `lon`, `cell_area_km2`). Output `output/real_daily_2024_<variable>.npz`:
+
+| variable | source | grid |
+|---|---|---|
+| precipitation | **REAL** (extraction team), mm/day = mm/h × 24, area-weighted block mean | 1° (`--res 0.5/0.25` for finer) |
+| snowfall | **REAL**: precipitation where `is_snow` | 1° |
+| surface_temperature | **REAL** NASA GISTEMP monthly anomaly, interpolated to days, + climatology | 2° |
+| co2 | **REAL** NOAA Mauna Loa trend, interpolated to days, + pattern | 2° |
+| dust, smoke, lightning | modelled daily, coupled to the real temperature anomaly | 2° |
+
+Each `.json` has `"frames_per_bar": 7`, so the orchestra plays **one bar per week** (2024 → 53 bars, about 2 min 47 s), and each beat is the **mean of its days** (no day skipped). Checks: Valencia flood 29 Oct 2024 = 131 mm/day; India monsoon July = 12.7 mm/day; global mean 2.54 mm/day.
+
 `output/` is generated: don't commit it (see `.gitignore`).

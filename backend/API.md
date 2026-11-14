@@ -60,6 +60,7 @@ All fields are optional. The smallest request is `{}` (global zone, default data
 | `variables` | list | subset of instruments, e.g. `["surface_temperature","co2"]` |
 | `palette` | string | `orchestra` (default), `auto` (regional instruments for the zone, fun mode), or a palette id |
 | `key`, `scale`, `bpm` | | musical options; `scale` default = major (or the palette's mode) |
+| `frames_per_bar` | number | data frames per bar. Default = the dataset's hint: **daily data → 7 (one bar per week)**, monthly → 1. Each beat averages its frames |
 | `audio`, `audio_format` | bool, `mp3`/`wav` | render audio (≈ +2 s with the SoundFont, ≈ +5–10 s with orchestral samples). `false` = MIDI + JSON only (≈ 0.5 s) |
 | `audio_engine` | `auto` / `vsco` / `sf2` | `auto`: real orchestral recordings (VSCO 2 CE) if installed on the server, otherwise the SoundFont. `GET /api/health` reports `orchestral_samples` |
 | `style` | `data` (default) / `musical` | **data**: every note follows the data (pitch = value, loudness/density = amount, anomaly markers). **musical**: orchestral arrangement with harmony, intro, climax |
@@ -199,6 +200,11 @@ All fields are optional. The smallest request is `{}` (global zone, default data
 }
 
 ```
+
+### New in v1.5 (real daily data, snowfall)
+- **Default dataset = the one with the most real variables**: `real_daily_2024` (the extraction team's real daily precipitation and snowfall + real temperature and CO₂). `GET /api/datasets` lists it with 366 frames, and `start`/`end` accept days (`"2024-10-01"`).
+- new instrument `snowfall` → **glockenspiel** (melody while it snows).
+- `frames_per_bar` request field; `score.frames_per_bar` in the response (bars = weeks for daily data; `bars[i].time` is the first day of the week).
 
 ### New in v1.4 (area as array positions)
 - request: `cells` (+ optional `cells_grid`) replaces `bbox` for custom areas, so the area can have any shape. Positions are `[row, col]` indices into the 2-D data array, the same indices you would use on the NumPy array (`array[row, col]`).

@@ -69,6 +69,7 @@ Variables that are **present all the time** (temperature, CO₂) form the harmon
 | **Melody** G4–G6 | rain (sometimes) | **Violins** | pitch = value, loudness = amount, **tremolo** (up to 4 notes/beat) when it pours | gated legato line |
 | **Melody** C5–A6 | dust (sometimes) | **Flute** | airy line while dust is present | gated legato line |
 | **Melody** F3–D5 | smoke (sometimes) | **French horns** | line while there are fires | gated legato line |
+| **Melody** G4–E6 (sounds 8va) | snowfall (sometimes) | **Glockenspiel** | pitch = value while it snows (real snow flag from the extraction) | gated line |
 | **Sparkle** F5–F7 | lightning (sometimes) | **Xylophone** | hits per beat = flash density, pitch = value | beat patterns, roll before the climax |
 
 ## 2. Time: everything lives in bars
@@ -131,6 +132,8 @@ Instruments in parentheses in the code are the closest General MIDI sound (e.g. 
 - with `--preview`: `_score.png` (lanes with bar lines and chord names) and `_preview.wav` (rough built-in synth)
 - with `--render`: **`<name>.wav` (or `--mp3`) with real orchestral recordings**: VSCO 2 Community Edition samples (CC0) when downloaded (`python music/sampler.py --download`), the GeneralUser GS SoundFont otherwise, plus a concert-hall reverb (see `../soundfonts/README.md`). Any MIDI file can also be rendered with `python music/render_audio.py file.mid [--engine auto|vsco|sf2]`
 
-Demo pieces on **real data** (`music/examples/real/`): Switzerland 2022–24, El Niño 2015–17, global 2022–24, India 2021–23, each as `*_data` (default style) and `*_musical`.
+Demo pieces on the **real daily 2024 data** (`music/examples/daily/`): Switzerland (snow in winter, summer storms), India (monsoon), Valencia (the 29 Oct flood is the wettest beat of the year).
+
+Demo pieces on **real monthly data** (`music/examples/real/`): Switzerland 2022–24, El Niño 2015–17, global 2022–24, India 2021–23, each as `*_data` (default style) and `*_musical`.
 
 Good zones to try: `india` (monsoon violins, pre-monsoon dust flute, storm xylophone), `sahara` (flute almost always: dust), `europe` (summer heat), `arctic`, `global`.

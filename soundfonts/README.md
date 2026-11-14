@@ -19,7 +19,8 @@
 | CO₂ (bass) | 43 | Solo Contrabass sustain |
 | Dust (melody) | 73 | Flute sustain (vibrato) |
 | Smoke (melody) | 60 | French Horn sustain |
-| Lightning | 13 | Xylophone |
+| Lightning | 13 | Xylophone (tuning corrected −15 cents) |
+| Snowfall (melody) | 9 | Glockenspiel (tuning corrected −15 cents) |
 
 `--engine sf2` forces the SoundFont only; `--engine vsco` downloads the samples if they're missing.
 
