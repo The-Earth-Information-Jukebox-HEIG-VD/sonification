@@ -39,7 +39,7 @@ from zone_to_midi import ZONES  # noqa: E402
 DATA_DIR = Path(os.environ.get("JUKEBOX_DATA_DIR", ROOT / "simulation" / "output"))
 CACHE_DIR = Path(os.environ.get("JUKEBOX_CACHE_DIR", ROOT / "backend" / "cache"))
 CORS = [o.strip() for o in os.environ.get("JUKEBOX_CORS", "*").split(",")]
-API_VERSION = "1.0"
+API_VERSION = "1.3"
 
 app = FastAPI(title="Earth Information Jukebox: sonification API", version=API_VERSION,
               description="Turns NASA EIC intensity maps into an orchestra (MIDI + audio).")
@@ -76,10 +76,10 @@ def scan_datasets() -> dict:
                                "frames": shape[0], "grid": shape[1:], "source": meta.get("source"),
                                "instrument": orchestra.ORCHESTRA.get(var, {}).get("name")}
         g.setdefault("times", times)
-        g["source"] = meta.get("source", "")
-        g["simulated"] = "SIMULATED" in str(meta.get("source", "")).upper()
+        g["variables"][var]["real"] = bool(meta.get("real", False))
         g["resolution_deg"] = meta.get("resolution_deg")
     for g in groups.values():
+        g["simulated"] = not any(v.get("real") for v in g["variables"].values())
         t = g.get("times") or []
         g["frames"] = len(t)
         g["time_start"], g["time_end"] = (t[0], t[-1]) if t else (None, None)
@@ -119,6 +119,16 @@ class ComposeRequest(BaseModel):
     audio: bool = Field(True, description="render audio with sampled instruments")
     audio_format: Literal["mp3", "wav"] = "mp3"
     reverb: float = Field(0.28, ge=0, le=0.8)
+    audio_engine: Literal["auto", "vsco", "sf2"] = Field("auto", description="auto: real orchestral samples "
+                                                         "(VSCO 2 CE) when installed, otherwise the SoundFont")
+    style: Literal["data", "musical"] = Field("data", description="data (default): every note follows the data "
+                                              "(pitch = value, loudness/density = amount); musical: orchestral arrangement")
+    quantize: Literal["scale", "pentatonic", "chromatic"] = Field("scale", description="data style pitch grid; chromatic = finest")
+    markers: bool = Field(True, description="data style: triangle on unusually hot months, woodblock on cold ones")
+    intro: bool = Field(True, description="musical style: 'meet the orchestra' intro")
+    tension: bool = Field(True, description="musical style: anomalies -> minor mode, dissonance, agitation")
+    climax: bool = Field(True, description="musical style: highlight the most anomalous moment")
+    humanize: float = Field(0.5, ge=0, le=1, description="musical style: phrase dynamics + human timing")
     include_notes: bool = Field(True, description="include every note in the response (set false for a lighter payload)")
     score_image: bool = Field(False, description="also produce a PNG of the score")
 
@@ -197,8 +207,10 @@ def health():
     except ImportError:
         audio_ok = False
     import shutil
+    import sampler
     return {"status": "ok", "version": API_VERSION, "datasets": len(ds), "data_dir": str(DATA_DIR),
-            "audio_rendering": audio_ok, "mp3_encoding": bool(shutil.which("ffmpeg"))}
+            "audio_rendering": audio_ok, "mp3_encoding": bool(shutil.which("ffmpeg")),
+            "orchestral_samples": sampler.vsco_available()}
 
 
 @app.get("/api/options")
@@ -257,7 +269,9 @@ def compose(req: ComposeRequest, request: Request):
                 surface=req.surface, start=start, end=end, loop=req.loop, mapping=req.mapping,
                 key=req.key, scale=req.scale, bpm=req.bpm, palette=req.palette, only=req.variables,
                 out_dir=folder, name="score", preview=req.score_image, render=req.audio,
-                reverb=req.reverb, audio_format=req.audio_format)
+                reverb=req.reverb, audio_format=req.audio_format,
+                intro=req.intro, tension=req.tension, climax=req.climax, humanize=req.humanize,
+                style=req.style, quantize=req.quantize, markers=req.markers, audio_engine=req.audio_engine)
         except orchestra.ComposeError as e:
             raise HTTPException(400, str(e))
         (folder / "score_preview.wav").unlink(missing_ok=True)  # rough synth preview not needed here

@@ -9,7 +9,9 @@ Backend for the Earth Information Jukebox. The frontend sends **what to listen t
 ## Run it
 ```bash
 pip install -r requirements.txt && pip install --no-deps tinysoundfont
-python simulation/simulate_variables.py --scenario both --warming 0.5 --years 2 --frames 24   # demo data
+python music/sampler.py --download        # optional: real orchestral samples (VSCO 2 CE, ~440 MB, once)
+pip install netCDF4 && python simulation/build_realistic_dataset.py     # real NASA/NOAA data (default)
+python simulation/simulate_variables.py --scenario both --warming 0.5 --years 2 --frames 24   # simulated demo data
 uvicorn backend.app:app --reload --port 8000
 ```
 | env var | default | meaning |
@@ -55,7 +57,15 @@ All fields are optional. The smallest request is `{}` (global zone, default data
 | `variables` | list | subset of instruments, e.g. `["surface_temperature","co2"]` |
 | `palette` | string | `orchestra` (default), `auto` (regional instruments for the zone, fun mode), or a palette id |
 | `key`, `scale`, `bpm` | | musical options; `scale` default = major (or the palette's mode) |
-| `audio`, `audio_format` | bool, `mp3`/`wav` | render audio with sampled instruments (≈ +2 s). `false` = MIDI + JSON only (≈ 0.5 s) |
+| `audio`, `audio_format` | bool, `mp3`/`wav` | render audio (≈ +2 s with the SoundFont, ≈ +5–10 s with orchestral samples). `false` = MIDI + JSON only (≈ 0.5 s) |
+| `audio_engine` | `auto` / `vsco` / `sf2` | `auto`: real orchestral recordings (VSCO 2 CE) if installed on the server, otherwise the SoundFont. `GET /api/health` reports `orchestral_samples` |
+| `style` | `data` (default) / `musical` | **data**: every note follows the data (pitch = value, loudness/density = amount, anomaly markers). **musical**: orchestral arrangement with harmony, intro, climax |
+| `quantize` | `scale` / `pentatonic` / `chromatic` | data style: pitch grid (chromatic = finest resolution) |
+| `markers` | bool (true) | data style: triangle on unusually hot months, woodblock on cold ones |
+| `intro` | bool (true) | musical style only: "meet the orchestra" intro |
+| `tension` | bool (true) | musical style only: anomalies → minor mode, 7ths, agitation |
+| `climax` | bool (true) | musical style only: highlight the most anomalous moment |
+| `humanize` | 0–1 (0.5) | musical style only: phrase dynamics and human timing |
 | `include_notes` | bool | `false` drops the note lists from the response (≈ half the size) |
 | `score_image` | bool | also make a PNG of the score |
 
@@ -127,7 +137,7 @@ All fields are optional. The smallest request is `{}` (global zone, default data
     ],
     "instruments": {
       "surface_temperature": {
-        "name": "Temperature - Violins",
+        "name": "Temperature - Piano (chords)",
         "role": "melody",
         "program": 49,
         "channel": 0,
@@ -187,10 +197,22 @@ All fields are optional. The smallest request is `{}` (global zone, default data
 
 ```
 
+### New in v1.2
+- `style` (default **`data`**): in data style `bars[i].chord` and `mode` are `null`, `sections` is just `[data]`, `intro_bars` = 0, and there's an extra instrument `anomaly_markers` (GM drums: 81 = triangle = hot, 77 = woodblock = cold). `bars[i].tension` is still reported (from the anomalies) in both styles, which is handy for the visuals.
+- each instrument: `pitch_range` (lowest and highest note used), so the UI can draw a pitch ↔ value legend from `values_per_beat`.
+
+### New in v1.1 (storytelling)
+- `score.sections`: `[{name: "intro"|"data"|"climax"|"outro", start_bar, bars, start_s, ...}]`. The intro has `entries` (`{bar, start_s, variable, instrument, role, units}`) for announcing each instrument; the climax has `time` (data date) and `tension`.
+- `score.bars[i]`: now also `start_s`, `tension` (0–1), `mode` (`major`/`minor`), `climax` (bool).
+- `score.instruments[v]`: also `anomaly_z_per_bar` (departure from normal, in standard deviations) and `source` (which dataset; `"REAL"` when observed).
+- every note: also `time_s` and `duration_s` in **real seconds**. **Use these** rather than `start * 60 / bpm`, because the outro slows down (`score.tempo_map`).
+- `score.intro_bars`: the data starts at bar `intro_bars`, at `sections[name=data].start_s` seconds.
+- `score.stats`: also `tense_bars` and `max_tension`.
+
 ### How to use it in the UI
 - **Just play it:** `<audio src={files.audio}>`. The MP3 is the whole orchestra with real sampled instruments.
-- **Sync visuals with the music:** a note plays at `start * 60 / bpm` seconds (`start` and `duration` are in beats). Bar *i* starts at `bars[i].start_beat * 60 / bpm` seconds and corresponds to the data date `bars[i].time`. Use that to move a cursor on the map or timeline, or highlight the current chord.
-- **Show what each instrument means:** `instruments[var].name` (e.g. "Temperature - Violins"), `units`, `values_per_beat` (the real data value, 4 per bar) and `presence_per_beat` (0–1, how strongly that phenomenon is present). Good for live gauges, accessible text ("Temperature 18.4 °C, rising"), or mute/solo buttons.
+- **Sync visuals with the music:** each note has `time_s`. Bar *i* starts at `bars[i].start_s` seconds and corresponds to the data date `bars[i].time`. Use that to move a cursor on the map or timeline, or highlight the current chord. `bars[i].tension` is great for a red "anomaly" glow, and the climax section for a highlight.
+- **Show what each instrument means:** `instruments[var].name` (e.g. "Temperature - Piano (chords)", "Rain - Violins (melody)"), `units`, `values_per_beat` (the real data value, 4 per bar) and `presence_per_beat` (0–1, how strongly that phenomenon is present). Good for live gauges, accessible text ("Temperature 18.4 °C, rising"), or mute/solo buttons.
 - **Mute/solo or a custom web synth:** use `files.stems` (one MIDI per instrument) or the `notes` arrays directly, e.g. with Tone.js, smplr or SpessaSynth.
 - **Data timeline:** `time_start`, `time_end`, `duration_s`, and `n_bars` (= number of data frames).
 

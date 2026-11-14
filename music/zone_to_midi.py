@@ -80,12 +80,12 @@ NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 
 # One instrument per variable (General MIDI program, channel). Extend for the orchestra.
 INSTRUMENTS = {   # same instruments as orchestra.py
-    "surface_temperature": {"program": 49, "channel": 0, "name": "Temperature - Violins"},
-    "temperature":         {"program": 49, "channel": 0, "name": "Temperature - Violins"},
-    "precipitation":       {"program": 45, "channel": 1, "name": "Rain - Pizzicato Strings"},
-    "aerosol_dust":        {"program": 0,  "channel": 2, "name": "Dust - Piano"},
-    "aerosol_smoke":       {"program": 57, "channel": 3, "name": "Smoke - Trombones"},
-    "lightning":           {"program": 47, "channel": 4, "name": "Lightning - Timpani"},
+    "surface_temperature": {"program": 0, "channel": 0, "name": "Temperature - Piano"},
+    "temperature":         {"program": 0, "channel": 0, "name": "Temperature - Piano"},
+    "precipitation":       {"program": 48, "channel": 1, "name": "Rain - Violins"},
+    "aerosol_dust":        {"program": 73, "channel": 2, "name": "Dust - Flute"},
+    "aerosol_smoke":       {"program": 60, "channel": 3, "name": "Smoke - French Horns"},
+    "lightning":           {"program": 13, "channel": 4, "name": "Lightning - Xylophone"},
     "co2":                 {"program": 43, "channel": 5, "name": "CO2 - Contrabass"},
 }
 

@@ -53,4 +53,17 @@ python simulation/simulate_variables.py --scenario both --warming 0.5 --years 2 
 ```
 `--warming` also intensifies rain, boreal fires and lightning, so the climate story stays consistent across instruments.
 
+## Realistic dataset on REAL observations: `build_realistic_dataset.py`
+```bash
+pip install netCDF4
+python simulation/build_realistic_dataset.py            # Jan 2015 .. latest month (≈140 months)
+```
+| variable | source |
+|---|---|
+| surface_temperature | **NASA GISTEMP v4** monthly anomaly (real, 2° grid) + modelled seasonal climatology |
+| co2 | **NOAA Mauna Loa** monthly CO₂ (real trend) + modelled seasonal/spatial pattern |
+| precipitation, dust, smoke, lightning | modelled seasonal fields, **coupled to the real local temperature anomaly** (hot months: more smoke and lightning, drier land) |
+
+Raw files download automatically into `simulation/raw/` (not committed). Output: `output/real_<start>_<end>_1deg_<variable>.npz`, and each `.json` says which variables are real (`"real": true`). The backend prefers this dataset when present. Checks: global yearly anomalies match NASA's (2024 = +1.29 °C); Zurich Jun 2019 +4.1 °C; El Niño Dec 2015 +3.0 °C.
+
 `output/` is generated: don't commit it (see `.gitignore`).

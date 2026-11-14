@@ -4,17 +4,19 @@ Earth Orchestra: several intensity maps (one per variable) -> one coherent multi
 
 Arranged "like a conductor":
 
-  REGISTER = ROLE. The more continuous and important a variable, the higher and more melodic;
-  the slower and more cumulative, the lower and more foundational; punctual events = rhythm.
+  (Temperature is played by the piano: a wide range and re-struck notes make it the most precise line.)
+  ALWAYS ON = FOUNDATION, SOMETIMES = MELODY. Variables present all the time (temperature, CO2) form
+  the harmonic bed; variables that only appear sometimes (rain, dust, smoke, lightning) carry the
+  melodies when they happen, so each melody entering is itself information.
 
-    voice (high -> low)   variable             instrument              role / rhythmic value
+    voice                 variable             instrument              data style / musical style
     -------------------   ------------------   ---------------------   ------------------------------------
-    melody   G4..G6       surface_temperature  Violins                 one legato line, quarters/halves, tied
-    rhythm   C4..A5       precipitation        Pizzicato strings       arpeggio: half -> quarter -> 8th notes
-    harmony  C3..G4       aerosol_dust         Piano                   chord, whole -> half -> quarter notes
-    swell    F2..C4       aerosol_smoke        Trombones               held fifths + crescendo, sus4 when thick
-    timpani  E2..G3       lightning            Timpani (tuned)         beats 1 -> 1&3 -> all beats -> roll
-    bass     E1..D3       co2                  Contrabass              one root per bar (= the harmony)
+    melody   G4..G6       precipitation        Violins                 pitch = value, tremolo when heavy / gated legato line
+    melody   C5..A6       aerosol_dust         Flute                   pitch = value while dust is present
+    melody   F3..D5       aerosol_smoke        French horns            pitch = value while smoke is present
+    sparkle  F5..F7       lightning            Xylophone               hits per beat = flash density, pitch = value
+    harmony  C3..C5       surface_temperature  Piano (chords)          chord every beat, root = value / comping
+    bass     E1..D3       co2                  Contrabass              pitch = value / one root per bar
 
   TIME = BARS. One frame = one bar (4 beats). One chord every 2 bars, changing only on bar lines:
   CO2 (the slow foundation) climbs a TENSION LADDER I -> vi -> IV -> ii -> V (with hysteresis) and
@@ -42,6 +44,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from midi_writer import MidiFile  # noqa: E402
 from zone_to_midi import (ZONES, SCALES, load_map, note_name, parse_key,  # noqa: E402
                           scale_notes, zone_mask, zone_series)
+import composition as comp  # noqa: E402
 
 SEVEN_NOTE_SCALES = [k for k, v in SCALES.items() if len(v) == 7]
 
@@ -52,18 +55,23 @@ SEVEN_NOTE_SCALES = [k for k, v in SCALES.items() if len(v) == 7]
 #   level    : mix level (scales velocity)  pan   : 0 left .. 127 right (orchestra seating)
 # ----------------------------------------------------------------------------
 ORCHESTRA = {
-    "surface_temperature": dict(name="Temperature - Violins", role="melody", program=49, channel=0,
-                                low=67, high=91, gain=1.0, gate=0.0, levels=[], level=0.95, pan=40),
-    "precipitation":       dict(name="Rain - Pizzicato Strings", role="rhythm", program=45, channel=1,
-                                low=60, high=81, gain=2.5, gate=0.10, levels=[0.35, 0.65], level=0.70, pan=88),
-    "aerosol_dust":        dict(name="Dust - Piano", role="harmony", program=0, channel=2,
-                                low=48, high=67, gain=4.0, gate=0.12, levels=[0.45, 0.75], level=0.70, pan=60),
-    "aerosol_smoke":       dict(name="Smoke - Trombones", role="swell", program=57, channel=3,
-                                low=41, high=60, gain=4.0, gate=0.12, levels=[0.60], level=0.75, pan=96),
-    "lightning":           dict(name="Lightning - Timpani", role="timpani", program=47, channel=4,
-                                low=40, high=55, gain=3.0, gate=0.08, levels=[0.35, 0.60, 0.85], level=0.85, pan=70),
+    # always present -> the foundation: harmony (piano chords) and bass
+    "surface_temperature": dict(name="Temperature - Piano (chords)", role="harmony", program=0, channel=0,
+                                low=48, high=72, gain=1.0, gate=0.0, levels=[0.45, 0.75], level=0.80, pan=64,
+                                always_on=True),
     "co2":                 dict(name="CO2 - Contrabass", role="bass", program=43, channel=5,
-                                low=28, high=50, gain=1.0, gate=0.0, levels=[], level=0.90, pan=78),
+                                low=28, high=50, gain=1.0, gate=0.0, levels=[], level=0.90, pan=78,
+                                always_on=True),
+    # present only sometimes -> they carry the melodies when they happen
+    "precipitation":       dict(name="Rain - Violins (melody)", role="melody", program=48, channel=1,
+                                low=67, high=91, gain=2.5, gate=0.10, levels=[0.35, 0.65], level=0.90, pan=36,
+                                tremolo=4),          # heavy rain -> up to 4 notes per beat (tremolo)
+    "aerosol_dust":        dict(name="Dust - Flute (melody)", role="melody", program=73, channel=2,
+                                low=72, high=93, gain=4.0, gate=0.12, levels=[0.45, 0.75], level=0.85, pan=24),
+    "aerosol_smoke":       dict(name="Smoke - French Horns (melody)", role="melody", program=60, channel=3,
+                                low=53, high=74, gain=4.0, gate=0.12, levels=[0.60], level=0.85, pan=96),
+    "lightning":           dict(name="Lightning - Xylophone", role="timpani", program=13, channel=4,
+                                low=77, high=101, gain=3.0, gate=0.08, levels=[0.35, 0.60, 0.85], level=0.75, pan=104),
 }
 # ----------------------------------------------------------------------------
 # Regional palettes (fun!): same roles and registers, local instruments.
@@ -150,7 +158,8 @@ def apply_palette(name):
     return orch
 
 
-HARMONY_PRIORITY = ["co2", "surface_temperature"]   # who chooses the chord of each bar
+HARMONY_PRIORITY = ["co2", "surface_temperature"]
+LEAD_VAR = "surface_temperature"   # its anomaly breaks ties when choosing the climax
 SMOOTH_ROLES = {"melody", "bass", "harmony", "swell", "rhythm"}  # timpani holds per frame (spiky)
 
 
@@ -224,6 +233,7 @@ def bar_levels(bar_pres, gate, thresholds):
 # Harmony: one chord per bar
 # ----------------------------------------------------------------------------
 QUALITY = {(4, 7): "", (3, 7): "m", (3, 6): "dim", (4, 8): "aug"}
+CHORD_ROOT_NAMES = ["C", "Db", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"]
 
 
 def chord_on(root, sl):
@@ -231,7 +241,7 @@ def chord_on(root, sl):
     triad = [sl[i], sl[i + 2], sl[i + 4]]
     q = QUALITY.get((triad[1] - triad[0], triad[2] - triad[0]), "")
     return {"root": root, "root_pc": root % 12, "triad": triad, "pcs": sorted({m % 12 for m in triad}),
-            "name": note_name(root)[:-1].rstrip("-0123456789") + q}
+            "name": CHORD_ROOT_NAMES[root % 12] + q}
 
 
 # Chords ordered by harmonic tension (scale degrees, 0 = tonic): rest -> tension.
@@ -273,6 +283,37 @@ def harmony_progression(n_bars, key_pc, scale):
     return [chord_on(sl[i0 + [0, 5, 3, 4][(b // 2) % 4]], sl) for b in range(n_bars)]
 
 
+MAJOR_LIKE = {"major", "lydian"}
+
+
+def darken(chords, tension, modes, key_pc, scale):
+    """Tension -> harmony. In 'minor' bars a major-mode piece borrows the parallel-minor chords
+    (I->i, IV->iv, vi->bVI, ii->iv, V stays major = harmonic minor) and the melody uses that scale.
+    Very tense bars (>= 0.75) add the 7th. Returns (chords, per-bar scale lists)."""
+    sl = scale_notes(key_pc, scale)
+    nat, harm = scale_notes(key_pc, "minor"), scale_notes(key_pc, "harmonic_minor")
+    iv = SCALES[scale]
+    out, scales = [], []
+    for h, t, mode in zip(chords, tension, modes):
+        if h is None:
+            out.append(None); scales.append(sl); continue
+        ch, scl = h, sl
+        if mode == "minor" and scale in MAJOR_LIKE:
+            pc = (h["root"] - key_pc) % 12
+            deg = iv.index(pc) if pc in iv else 0
+            deg = 3 if deg == 1 else deg                     # ii -> iv (avoids ii dim)
+            src = harm if deg == 4 else nat
+            target_pc = (key_pc + SCALES["harmonic_minor" if deg == 4 else "minor"][deg]) % 12
+            root = min((m for m in src if m % 12 == target_pc), key=lambda m: abs(m - h["root"]))
+            ch, scl = chord_on(root, src), src
+        if t >= 0.75 and ch["root"] in scl:
+            i = scl.index(ch["root"])
+            sev = scl[i + 6]
+            ch = {**ch, "pcs": sorted(set(ch["pcs"]) | {sev % 12}), "name": ch["name"] + "7"}
+        out.append(ch); scales.append(scl)
+    return out, scales
+
+
 def tones(pcs, low, high):
     return [m for m in range(low, high + 1) if m % 12 in pcs]
 
@@ -288,37 +329,45 @@ def nearest(target, cand, prev=None, smooth=0.0):
 # ----------------------------------------------------------------------------
 def role_melody(cfg, c):
     """Violins: one legato line. Strong beats (1, 3) = chord tones; weak beats may pass through
-    scale tones. Repeated pitches are tied; every 4th bar ends with a short breath."""
+    scale tones. Repeated pitches are tied; every 4th bar ends with a short breath.
+    Tense bars (anomaly): restless eighth-note motion (note + upper neighbour), shorter articulation."""
     lo, hi, bpb = cfg["low"], cfg["high"], c["bpb"]
-    scale_in = [m for m in c["sl"] if lo <= m <= hi]
+    bar_scales, tens = c.get("bar_scale"), c.get("tension")
     notes, prev = [], None
     for b, h in enumerate(c["harmony"]):
-        if h is None:
+        if h is None or (cfg.get("gate", 0) > 0 and c["levels"][b] == 0):
             prev = None; continue
+        scale_in = [m for m in (bar_scales[b] if bar_scales else c["sl"]) if lo <= m <= hi]
+        agitated = tens is not None and tens[b] >= 0.6
         bar = []
         for k in range(bpb):
             i = b * bpb + k
             nv = c["norm"][i]
             if not np.isfinite(nv):
                 continue
-            strong = k % 2 == 0
-            cand = tones(h["pcs"], lo, hi) if strong else scale_in
+            cand = tones(h["pcs"], lo, hi) if k % 2 == 0 else scale_in
             p = nearest(lo + nv * (hi - lo), cand, prev, smooth=0.35)
             vel = cfg["level"] * (62 + 40 * nv + (8 if k == 0 else 0))
-            if bar and bar[-1][0] == p and bar[-1][1] + bar[-1][2] == i:
+            if agitated:
+                j = scale_in.index(p) if p in scale_in else None
+                nb = scale_in[j + 1] if j is not None and j + 1 < len(scale_in) else p
+                bar.append([p, i, 0.5, vel, 0.8])
+                bar.append([nb, i + 0.5, 0.5, vel * 0.85, 0.8])
+            elif bar and bar[-1][0] == p and bar[-1][1] + bar[-1][2] == i and bar[-1][4] > 0.9:
                 bar[-1][2] += 1                       # tie repeated note
             else:
-                bar.append([p, i, 1, vel])
+                bar.append([p, i, 1, vel, 0.97])
             prev = p
-        if bar and (b + 1) % 4 == 0:                  # phrase breath every 4 bars
+        if bar and (b + 1) % 4 == 0 and not agitated:  # phrase breath every 4 bars
             bar[-1][2] = max(0.5, bar[-1][2] - 0.35)
-        notes += [(p, s, d * 0.97, v) for p, s, d, v in bar]
+        notes += [(p, s_, d * leg, v) for p, s_, d, v, leg in bar]
     return notes, []
 
-
 def role_bass(cfg, c):
-    """Contrabass: the chord root, one whole note per bar; doubled an octave down when high."""
+    """Contrabass: the chord root, one whole note per bar; doubled an octave down when high.
+    Tense bars: driving eighth-note ostinato on the root (film-score agitation)."""
     lo, hi, bpb = cfg["low"], cfg["high"], c["bpb"]
+    tens = c.get("tension")
     notes, prev = [], None
     for b, h in enumerate(c["harmony"]):
         if h is None or not np.isfinite(c["bar_norm"][b]):
@@ -329,11 +378,15 @@ def role_bass(cfg, c):
         prev = p
         pres = c["bar_pres"][b]
         vel = cfg["level"] * (58 + 45 * pres)
+        if tens is not None and tens[b] >= 0.6:
+            for j in range(bpb * 2):
+                q = p + 12 if (j % 4 == 2 and p + 12 <= 55) else p
+                notes.append((q, b * bpb + j * 0.5, 0.42, vel * (1.0 if j % 2 == 0 else 0.78)))
+            continue
         notes.append((p, b * bpb, bpb * 0.98, vel))
         if pres > 0.75 and p - 12 >= 28:
             notes.append((p - 12, b * bpb, bpb * 0.98, vel * 0.85))
     return notes, []
-
 
 def role_harmony(cfg, c):
     """Piano: the bar's chord, voice-led (each voicing moves as little as possible).
@@ -342,10 +395,13 @@ def role_harmony(cfg, c):
     rhythms = {1: [(0, bpb, 1.0)], 2: [(0, bpb / 2, 1.0), (bpb / 2, bpb / 2, 0.85)],
                3: [(k, 1, 1.0 if k % 2 == 0 else 0.75) for k in range(bpb)]}
     notes, prev = [], None
+    tens = c.get("tension")
     for b, h in enumerate(c["harmony"]):
         lvl = c["levels"][b]
         if h is None or lvl == 0:
             continue
+        if tens is not None and tens[b] >= 0.6:
+            lvl = min(lvl + 1, 3)                      # tense: the piano pulses faster
         k = 3 if c["bar_pres"][b] < 0.5 else 4
         ts = tones(h["pcs"], lo, hi)
         windows = [ts[j:j + k] for j in range(len(ts) - k + 1)] or [ts]
@@ -449,6 +505,149 @@ def role_timpani(cfg, c):
     return notes, []
 
 
+# ----------------------------------------------------------------------------
+# DATA-FAITHFUL roles (style="data", the default): every note comes from the data.
+#   pitch    = the variable's value, mapped linearly onto the quantisation grid of the register
+#   loudness = how much of the phenomenon is present (rain, dust, smoke, lightning)
+#   density  = amount, for event-like variables (rain plucks, lightning hits) - deterministic
+# No chord snapping, no smoothing, no invented notes.
+# ----------------------------------------------------------------------------
+def _grid(cfg, c):
+    return c["qnotes"](cfg["low"], cfg["high"])
+
+
+def _pitch(nv, grid):
+    return grid[int(round(float(np.clip(nv, 0, 1)) * (len(grid) - 1)))]
+
+
+def _data_line(cfg, c, sustain=True, gate=False, vel_from_presence=False):
+    grid, notes, cur = _grid(cfg, c), [], None
+    for i, nv in enumerate(c["norm"]):
+        pr = c["pres"][i]
+        if not np.isfinite(nv) or (gate and (not np.isfinite(pr) or pr < cfg["gate"])):
+            cur = None; continue
+        p = _pitch(nv, grid)
+        vel = cfg["level"] * (45 + 80 * pr) if vel_from_presence else cfg["level"] * 92
+        if sustain and cur is not None and cur[0] == p and cur[1] + cur[2] == i:
+            cur[2] += 1                                   # same value -> held note
+            continue
+        cur = [p, i, 1, vel]
+        notes.append(cur)
+    return [(p, s_, d * 0.95, v) for p, s_, d, v in notes]
+
+
+def data_chords(cfg, c):
+    """Temperature (always on): a piano chord on every beat. Its ROOT = the value (linear on the scale
+    grid of the register); the third and fifth are the next scale tones, so the harmony itself moves
+    with the data. Hotter (absolute) -> a little louder; accent on each bar's downbeat."""
+    grid, notes = _grid(cfg, c), []
+    full = c["qnotes"](cfg["low"], cfg["high"] + 12)
+    for i, nv in enumerate(c["norm"]):
+        if not np.isfinite(nv):
+            continue
+        root = _pitch(nv, grid)
+        j = full.index(root) if root in full else None
+        chord = [root] + ([full[j + 2], full[j + 4]] if j is not None and j + 4 < len(full) else [root + 4, root + 7])
+        pr = c["pres"][i] if np.isfinite(c["pres"][i]) else 0.5
+        vel = cfg["level"] * (62 + 30 * pr) * (1.0 if i % c["bpb"] == 0 else 0.82)
+        for q in chord:
+            notes.append((q, i, 0.9, vel))
+    return notes, []
+
+
+def data_melody_intermittent(cfg, c):
+    """Rain / dust / smoke: a melody that only plays while the phenomenon is present.
+    pitch = value, loudness = amount; with `tremolo`, heavy amounts repeat the note faster."""
+    grid, notes, cur = _grid(cfg, c), [], None
+    trem = int(cfg.get("tremolo", 1))
+    for i, nv in enumerate(c["norm"]):
+        pr = c["pres"][i]
+        if not np.isfinite(nv) or not np.isfinite(pr) or pr < cfg["gate"]:
+            cur = None; continue
+        p = _pitch(nv, grid)
+        vel = cfg["level"] * (50 + 75 * pr)
+        n = 1 + int(round(pr * (trem - 1))) if trem > 1 else 1
+        if n > 1:
+            for k in range(n):
+                notes.append([p, i + k / n, 0.95 / n, vel * (1.0 if k == 0 else 0.85)])
+            cur = None; continue
+        if cur is not None and cur[0] == p and cur[1] + cur[2] >= i - 1e-9:
+            cur[2] += 1; continue
+        cur = [p, i, 1, vel]
+        notes.append(cur)
+    return [(p, s_, d * (0.95 if d >= 1 else 1.0), v) for p, s_, d, v in notes], []
+
+
+def data_melody(cfg, c):
+    """Temperature: the lead data line. `steps_per_beat` samples per beat (values interpolated between
+    beats), re-struck every step when `restrike` (piano: you keep hearing the current value)."""
+    k = int(cfg.get("steps_per_beat", 1))
+    if k <= 1:
+        return _data_line(cfg, c, sustain=not cfg.get("restrike")), []
+    grid, notes = _grid(cfg, c), []
+    norm = np.asarray(c["norm"], dtype=float)
+    n = len(norm)
+    pos = np.arange(n * k) / k
+    fine = np.interp(pos, np.arange(n), np.where(np.isfinite(norm), norm, np.nan))
+    for j, nv in enumerate(fine):
+        if not np.isfinite(nv):
+            continue
+        p = _pitch(nv, grid)
+        accent = 1.0 if j % (k * 2) == 0 else (0.9 if j % k == 0 else 0.8)   # light pulse on beats
+        if not cfg.get("restrike") and notes and notes[-1][0] == p and notes[-1][1] + notes[-1][2] >= pos[j] - 1e-9:
+            notes[-1] = (p, notes[-1][1], notes[-1][2] + 1 / k, notes[-1][3]); continue
+        notes.append((p, pos[j], 0.95 / k, cfg["level"] * 92 * accent))
+    return notes, []
+
+
+def data_bass(cfg, c):          # CO2: same, low register
+    return _data_line(cfg, c, sustain=True), []
+
+
+def data_harmony(cfg, c):       # dust: re-struck every beat while present, louder = more dust
+    return _data_line(cfg, c, sustain=False, gate=True, vel_from_presence=True), []
+
+
+def data_swell(cfg, c):         # smoke: held line, CC11 expression = amount of smoke
+    notes = _data_line(cfg, c, sustain=True, gate=True, vel_from_presence=True)
+    ccs = [(11, 25 + 102 * (p if np.isfinite(p) else 0), i) for i, p in enumerate(c["pres"])]
+    return notes, ccs
+
+
+def data_rhythm(cfg, c):        # rain: plucks per beat = amount of rain, pitch = value
+    grid, notes = _grid(cfg, c), []
+    for i, nv in enumerate(c["norm"]):
+        pr = c["pres"][i]
+        if not np.isfinite(nv) or not np.isfinite(pr) or pr < cfg["gate"]:
+            continue
+        n = max(1, int(round(pr * cfg.get("max_notes", 8))))
+        p = _pitch(nv, grid)
+        for j in range(n):
+            notes.append((p, i + j / n, 0.9 / n, cfg["level"] * (45 + 80 * pr)))
+    return notes, []
+
+
+def data_timpani(cfg, c):       # lightning: hits per beat = flash density, pitch = value
+    grid, notes = _grid(cfg, c), []
+    for i, nv in enumerate(c["norm"]):
+        pr = c["pres"][i]
+        if not np.isfinite(nv) or not np.isfinite(pr) or pr < cfg["gate"]:
+            continue
+        n = max(1, int(round(pr * cfg.get("max_hits", 4))))
+        p = _pitch(nv, grid)
+        for j in range(n):
+            notes.append((p, i + j / n, 0.9 / n, cfg["level"] * (50 + 77 * pr)))
+    return notes, []
+
+
+DATA_ROLES = {"melody": data_melody_intermittent, "bass": data_bass, "harmony": data_chords,
+              "rhythm": data_rhythm, "swell": data_swell, "timpani": data_timpani}
+
+MARKER_CFG = dict(name="Anomaly markers - Triangle (hot) / Woodblock (cold)", role="markers", program=0,
+                  channel=9, low=76, high=81, gain=1.0, gate=0.0, levels=[], level=0.8, pan=64)
+MARKER_HOT, MARKER_COLD = 81, 77      # GM drums: open triangle, low wood block
+
+
 ROLES = {"melody": role_melody, "bass": role_bass, "harmony": role_harmony,
          "rhythm": role_rhythm, "swell": role_swell, "timpani": role_timpani}
 
@@ -460,14 +659,16 @@ def ending(parts, n_bars, bpb, key_pc, scale):
     t0 = n_bars * bpb
     for p in parts:
         cfg, role = p["cfg"], p["cfg"]["role"]
-        last = [n[0] for n in p["notes"][-4:]] or [(cfg["low"] + cfg["high"]) // 2]
+        if not p["notes"]:
+            continue                                     # instruments that never played stay silent
+        last = [n[0] for n in p["notes"][-4:]]
         if role == "melody":
             q = nearest(last[-1], [m for m in range(cfg["low"], cfg["high"] + 1) if m % 12 == key_pc])
             p["notes"].append((q, t0, 2 * bpb, cfg["level"] * 80))
         elif role == "bass":
             q = nearest(last[-1], [m for m in range(cfg["low"], cfg["high"] + 1) if m % 12 == key_pc])
             p["notes"].append((q, t0, 2 * bpb, cfg["level"] * 85))
-        elif role == "harmony":
+        elif role == "harmony" and p["notes"]:          # only if the piano actually played
             for q in tones(tonic["pcs"], cfg["low"], cfg["high"])[:4]:
                 p["notes"].append((q, t0, 2 * bpb, cfg["level"] * 60))
     return t0 + 2 * bpb
@@ -476,11 +677,11 @@ def ending(parts, n_bars, bpb, key_pc, scale):
 # ----------------------------------------------------------------------------
 # Preview: score lanes + stereo synth
 # ----------------------------------------------------------------------------
-COLORS = {"melody": "#d1495b", "rhythm": "#00798c", "harmony": "#8f6593",
+COLORS = {"markers": "#e07a5f", "melody": "#d1495b", "rhythm": "#00798c", "harmony": "#8f6593",
           "swell": "#edae49", "timpani": "#3d3d3d", "bass": "#30638e"}
 
 
-def score_png(parts, harmony, total_beats, bpb, path, title):
+def score_png(parts, harmony, total_beats, bpb, path, title, intro_beats=0, tension=None):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -494,16 +695,22 @@ def score_png(parts, harmony, total_beats, bpb, path, title):
         for x in range(0, int(total_beats) + 1, bpb):
             ax.axvline(x, color="#999", lw=0.4, alpha=0.5)
         ax2 = ax.twinx()
-        ax2.plot(np.arange(len(p["pres"])) + 0.5, p["pres"], color=col, lw=1, alpha=0.5)
+        ax2.plot(np.arange(len(p["pres"])) + 0.5 + intro_beats, p["pres"], color=col, lw=1, alpha=0.5)
+        if tension is not None:                       # red shading = anomaly tension
+            for b, tv in enumerate(tension):
+                if tv > 0.05:
+                    ax.axvspan(intro_beats + b * bpb, intro_beats + (b + 1) * bpb, color="#d1495b", alpha=0.18 * tv, lw=0)
+        if intro_beats:
+            ax.axvspan(0, intro_beats, color="#999", alpha=0.08, lw=0)
         ax2.set_ylim(0, 1.05); ax2.set_yticks([])
         ax.set_yticks([])
         ax.set_ylabel(p["cfg"]["name"].replace(" - ", "\n"), rotation=0, ha="right", va="center", fontsize=8)
         if li == 0:
             for b, h in enumerate(harmony):
                 if h is not None:
-                    ax.text(b * bpb + 0.1, max(ps) + 1.2, h["name"], fontsize=6, color="#555", va="bottom")
+                    ax.text(intro_beats + b * bpb + 0.1, max(ps) + 1.2, h["name"], fontsize=6, color="#555", va="bottom")
     axes[0, 0].set_title(title)
-    axes[-1, 0].set_xlabel("beats  (thin lines = bar lines; curve = presence of the phenomenon)")
+    axes[-1, 0].set_xlabel("beats  (grey = intro; red shading = anomaly tension; curve = presence of the phenomenon)")
     axes[-1, 0].set_xlim(0, total_beats)
     fig.tight_layout(); fig.savefig(path, dpi=100); plt.close(fig)
 
@@ -511,6 +718,10 @@ def score_png(parts, harmony, total_beats, bpb, path, title):
 def synth(role, pitch, dur, vel, sr):
     a = vel / 127
     f = 440 * 2 ** ((pitch - 69) / 12)
+    if role == "markers":
+        L = int(0.8 * sr); t = np.arange(L) / sr
+        f = 2600 if pitch == MARKER_HOT else 700
+        return a * 0.6 * np.sin(2 * np.pi * f * t) * np.exp(-t * (4 if pitch == MARKER_HOT else 25))
     rel = {"melody": 0.3, "bass": 0.35, "harmony": 0.6, "rhythm": 0.25, "swell": 0.3, "timpani": 1.6}[role]
     L = int((dur + rel) * sr)
     t = np.arange(L) / sr
@@ -610,10 +821,19 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
             mapping="hybrid", key="C", scale=None, harmony="auto", chord_bars=2, bpm=76.0,
             beats_per_bar=4, frames_per_bar=1.0, add_ending=True, palette="orchestra",
             only=None, exclude=None, seed=7, out_dir=None, name=None,
-            preview=False, render=False, reverb=0.28, audio_format="wav", verbose=False):
+            preview=False, render=False, reverb=0.28, audio_format="wav", verbose=False,
+            intro=True, tension=True, climax=True, humanize=0.5,
+            style="data", quantize="scale", markers=True, marker_threshold=1.5, audio_engine="auto"):
     """Data maps -> score. Writes MIDI (+ stems, JSON, optional PNG/audio) to out_dir and returns
     a dict with the score document, file paths and stats."""
     log = print if verbose else (lambda *a, **k: None)
+    if style not in ("data", "musical"):
+        raise ComposeError("style must be 'data' or 'musical'")
+    if quantize not in ("scale", "pentatonic", "chromatic"):
+        raise ComposeError("quantize must be 'scale', 'pentatonic' or 'chromatic'")
+    musical = style == "musical"
+    if not musical:      # data-faithful: nothing that isn't in the data
+        intro, climax, humanize, add_ending = False, False, None, False
     pal_name = resolve_palette(palette, zone, bbox)
     orch = apply_palette(pal_name)
     scale = scale or PALETTE_SCALE.get(pal_name, "major")
@@ -649,12 +869,15 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
             raise ComposeError(str(e))
         times = z["time"] if "time" in z.files else None
         m, _ = zone_series(z["data"].astype(np.float32), z["lat"], mask)
+        # anomaly vs the seasonal normal, computed on the FULL series before any time window
+        _, zsc, _ = comp.seasonal_anomaly(m, times, log=var in comp.SKEWED)
         win = _time_window(times, start, end)
         if win is not None:
-            m = m[win]; times = times[win] if times is not None else None
+            m, zsc = m[win], zsc[win]
+            times = times[win] if times is not None else None
         if len(m) < 1 or not np.isfinite(m).any():
             continue
-        series[var] = dict(mean=m, meta=meta, times=times)
+        series[var] = dict(mean=m, z=zsc, meta=meta, times=times)
     if not series:
         raise ComposeError("no usable data for this zone / selection")
 
@@ -668,19 +891,26 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
 
     for var, d in series.items():
         cfg = orch[var]
-        vals = sample_beats(d["mean"], n_ref, n_beats, fpb, bpb, loop, cfg["role"] in SMOOTH_ROLES)
+        smooth = cfg["role"] in SMOOTH_ROLES
+        vals = sample_beats(d["mean"], n_ref, n_beats, fpb, bpb, loop, smooth)
         vmin, vmax = d["meta"].get("vmin", np.nanmin(vals)), d["meta"].get("vmax", np.nanmax(vals))
         absn = np.clip((vals - vmin) / ((vmax - vmin) or 1), 0, 1)
         reln = rel_norm(vals)
         d["values"] = vals
         d["norm"] = absn if mapping == "absolute" else reln
         pres = np.clip((reln if mapping == "relative" else absn) * cfg["gain"], 0, 1)
-        if cfg["role"] in ("melody", "bass"):
+        if cfg.get("always_on"):
             pres = np.where(np.isfinite(vals), np.maximum(pres, 0.35), np.nan)
         d["pres"] = pres
         d["bar_norm"], d["bar_pres"] = per_bar(d["norm"], bpb), per_bar(pres, bpb)
         d["levels"] = bar_levels(d["bar_pres"], cfg["gate"], cfg["levels"])
+        d["bar_z"] = per_bar(sample_beats(d["z"], n_ref, n_beats, fpb, bpb, loop, smooth), bpb)
 
+    # ---- tension (anomalies) -> harmony colour
+    tens_info = comp.tension_curve({v: d["bar_z"] for v, d in series.items()})
+    use_tension = tension and musical
+    tens = tens_info if use_tension else np.zeros(n_bars)
+    modes = comp.modes_with_hysteresis(tens) if use_tension else (["major"] * n_bars if musical else [None] * n_bars)
     hsrc = None if harmony == "progression" else (
         harmony if harmony != "auto" else next((v for v in HARMONY_PRIORITY if v in series), None))
     if hsrc and hsrc in series:
@@ -688,18 +918,111 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
     else:
         hsrc = None
         chords = harmony_progression(n_bars, key_pc, scale)
+    chords, bar_scales = darken(chords, tens, modes, key_pc, scale) if use_tension else (chords, None)
+    if not musical:
+        chords = [None] * n_bars       # no harmony in data style: voices follow their own data
 
+    if quantize == "chromatic":
+        qnotes = lambda lo_, hi_: list(range(lo_, hi_ + 1))  # noqa: E731
+    elif quantize == "pentatonic":
+        pent = scale_notes(key_pc, "minor_pentatonic" if scale in ("minor", "harmonic_minor", "dorian") else "pentatonic")
+        qnotes = lambda lo_, hi_: [m for m in pent if lo_ <= m <= hi_]  # noqa: E731
+    else:
+        qnotes = lambda lo_, hi_: [m for m in sl if lo_ <= m <= hi_]  # noqa: E731
+
+    # ---- arrange the data section (beat 0 = first data bar)
     parts = []
     for var, cfg in orch.items():
         if var not in series:
             continue
         d = series[var]
         ctx = dict(harmony=chords, norm=d["norm"], pres=d["pres"], bar_norm=d["bar_norm"],
-                   bar_pres=d["bar_pres"], levels=d["levels"], bpb=bpb, sl=sl, rng=rng)
-        notes, ccs = ROLES[cfg["role"]](cfg, ctx)
-        notes = [(int(p), float(s_), float(du), int(np.clip(v, 1, 127))) for p, s_, du, v in notes]
-        parts.append(dict(var=var, cfg=cfg, notes=notes, ccs=ccs, pres=np.nan_to_num(d["pres"])))
-    total_beats = ending(parts, n_bars, bpb, key_pc, scale) if add_ending else n_beats
+                   bar_pres=d["bar_pres"], levels=d["levels"], bpb=bpb, sl=sl, rng=rng,
+                   tension=tens, bar_scale=bar_scales, qnotes=qnotes)
+        notes, ccs = (ROLES if musical else DATA_ROLES)[cfg["role"]](cfg, ctx)
+        parts.append(dict(var=var, cfg=cfg, notes=list(notes), ccs=list(ccs), pres=np.nan_to_num(d["pres"])))
+
+    # ---- anomaly markers (data style): triangle = unusually hot month, woodblock = unusually cold
+    marker_var = LEAD_VAR if LEAD_VAR in series else None
+    if markers and not musical and marker_var:
+        zb = series[marker_var]["bar_z"]
+        mnotes, mlev = [], []
+        for b, zz in enumerate(zb):
+            hit = np.isfinite(zz) and abs(zz) >= marker_threshold
+            mlev.append(1 if hit else 0)
+            if hit:
+                vel = 70 + 57 * min(1.0, (abs(zz) - marker_threshold) / 1.5)
+                mnotes.append((MARKER_HOT if zz > 0 else MARKER_COLD, b * bpb, 1.0, vel))
+        zbeat = np.repeat(np.nan_to_num(zb), bpb)
+        series["anomaly_markers"] = dict(values=zbeat, bar_z=zb, levels=mlev,
+                                         meta={"units": "z (temperature anomaly)", "source": "derived from temperature"})
+        parts.append(dict(var="anomaly_markers", cfg=dict(MARKER_CFG), notes=mnotes, ccs=[],
+                          pres=np.clip(np.abs(zbeat) / 3, 0, 1)))
+
+    # ---- climax: the most anomalous bar
+    tz = np.nan_to_num(np.abs(series[LEAD_VAR]["bar_z"])) if LEAD_VAR in series else np.zeros(n_bars)
+    climax_bar = int(np.argmax(tens + 0.01 * tz)) if (climax and use_tension and tens.max() >= 0.4) else None
+    if climax_bar is not None:
+        c0, c1 = climax_bar * bpb, (climax_bar + 2) * bpb
+        for p in parts:
+            boosted = [(pt, st, du, v * 1.15 if c0 <= st < c1 else v) for pt, st, du, v in p["notes"]]
+            if p["cfg"]["role"] == "melody":      # violins doubled an octave up
+                boosted += [(pt + 12, st, du, v * 0.85) for pt, st, du, v in p["notes"] if c0 <= st < c1 and pt + 12 <= 100]
+            if p["cfg"]["role"] == "timpani" and climax_bar > 0 and chords[climax_bar]:
+                lo_, hi_ = p["cfg"]["low"], p["cfg"]["high"]
+                r = nearest((lo_ + hi_) / 2, [m for m in range(lo_, hi_ + 1) if m % 12 == chords[climax_bar]["root_pc"]])
+                boosted += [(r, c0 - 1 + j / 8, 0.12, 60 + 8 * j) for j in range(8)]   # roll into the climax
+                boosted.append((r, c0, 1.5, 127))
+            p["notes"] = boosted
+
+    # ---- outro: final cadence on the tonic (data-relative), slowed down by the tempo map
+    end_data = n_beats
+    total_data = ending(parts, n_bars, bpb, key_pc, scale) if add_ending else n_beats
+
+    # ---- intro: "meet the orchestra" (instruments enter one by one)
+    intro_beats, entries = 0, []
+    if intro:
+        order = ["bass", "harmony", "timpani", "swell", "rhythm", "melody"]
+        active = [p for p in parts if p["cfg"].get("always_on") or max(series[p["var"]]["levels"]) > 0]
+        active.sort(key=lambda p: order.index(p["cfg"]["role"]))
+        n_in = len(active) + 1
+        i0 = next(i for i, m in enumerate(sl) if m >= 36 and m % 12 == key_pc)
+        prog = [0, 3, 5, 4]                                   # I IV vi V ... then V into the data
+        intro_chords = [chord_on(sl[i0 + prog[b % 4]], sl) for b in range(n_in - 1)] + [chord_on(sl[i0 + 4], sl)]
+        nb = n_in * bpb
+        for k, p in enumerate(active):
+            cfg = p["cfg"]
+            norm = np.linspace(0.25, 0.6, nb) if cfg["role"] == "melody" else np.full(nb, 0.45)
+            norm[: k * bpb] = np.nan
+            pres = np.where(np.isfinite(norm), 0.55, 0.0)
+            ctx_i = dict(harmony=intro_chords, norm=norm, pres=pres, bar_norm=per_bar(norm, bpb),
+                         bar_pres=per_bar(pres, bpb), levels=[0] * k + [1] * (n_in - k), bpb=bpb, sl=sl,
+                         rng=rng, tension=np.zeros(n_in), bar_scale=None)
+            inotes, iccs = ROLES[cfg["role"]](cfg, ctx_i)
+            p["intro_notes"], p["intro_ccs"] = list(inotes), list(iccs)
+            entries.append({"bar": k, "variable": p["var"], "instrument": cfg["name"], "role": cfg["role"],
+                            "units": series[p["var"]]["meta"].get("units")})
+        intro_beats = nb
+    for p in parts:                                          # shift the data section after the intro
+        p["notes"] = p.pop("intro_notes", []) + [(pt, st + intro_beats, du, v) for pt, st, du, v in p["notes"]]
+        p["ccs"] = p.pop("intro_ccs", []) + [(cn, cv, cb + intro_beats) for cn, cv, cb in p["ccs"]]
+    total_beats = intro_beats + total_data
+    outro_start = intro_beats + end_data if add_ending else None
+
+    # ---- expression: phrase hairpins, tension dynamics, humanisation, CC11 swells
+    def tension_at(beat):
+        b_ = int((beat - intro_beats) // bpb)
+        return 0.15 if beat < intro_beats else (float(tens[b_]) if 0 <= b_ < n_bars else 0.0)
+    if humanize is not None:
+        comp.apply_expression(parts, bpb, rng, tension_at, phrase_offset=intro_beats, humanize=humanize)
+        for p in parts:
+            if p["cfg"]["role"] in ("melody", "bass") and p["var"] != "aerosol_smoke":
+                p["ccs"] += comp.expression_cc(total_beats, bpb, intro_beats, tension_at)
+    for p in parts:
+        p["notes"] = sorted((int(pt), float(st), float(du), int(np.clip(v, 1, 127))) for pt, st, du, v in p["notes"])
+        p["ccs"] = sorted(p["ccs"], key=lambda c_: c_[2])
+    tmap = comp.tempo_map(bpm, total_beats, outro_start)
+    b2s = lambda b: comp.beat_to_sec(b, tmap)  # noqa: E731
 
     # ---- files
     out = Path(out_dir) if out_dir else Path(__file__).resolve().parent / "output"
@@ -713,6 +1036,8 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
         cfg = p["cfg"]
         stem = MidiFile(bpm=bpm, time_sig=(bpb, 4))
         for mf in (score, stem):
+            for tb, tbpm in tmap[1:]:
+                mf.tempo(tb, tbpm)
             t = mf.add_track(cfg["name"], cfg["program"], cfg["channel"])
             t.cc(7, 100); t.cc(10, cfg["pan"]); t.cc(11, 127 if not p["ccs"] else 0)
             for cnum, v, b in p["ccs"]:
@@ -721,10 +1046,12 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
                 t.note(pitch, st, du, vel)
         stem.save(stems_dir / f"{p['var']}.mid")
         paths["stems"][p["var"]] = stems_dir / f"{p['var']}.mid"
-    marker_track = score.add_track("Chords (markers)", 0, 15)
+    marker_track = score.add_track("Sections & chords (markers)", 0, 15)
+    for e in entries:
+        marker_track.marker(f"enters: {e['instrument']}", e["bar"] * bpb)
     for b, h in enumerate(chords):
         if h is not None:
-            marker_track.marker(h["name"], b * bpb)
+            marker_track.marker(h["name"] + ("  [CLIMAX]" if b == climax_bar else ""), intro_beats + b * bpb)
     score.save(paths["midi"])
 
     times = series[ref_var]["times"]
@@ -734,27 +1061,51 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
     for p in parts:
         for pitch, st, du, vel in p["notes"]:
             grid[int(st * 4): int((st + du) * 4)] += 1
+    intro_bars = intro_beats // bpb
+    sections = []
+    if intro:
+        sections.append({"name": "intro", "start_bar": 0, "bars": intro_bars, "start_s": 0.0,
+                         "entries": [{**e, "start_s": round(b2s(e["bar"] * bpb), 3)} for e in entries]})
+    sections.append({"name": "data", "start_bar": intro_bars, "bars": n_bars, "start_s": round(b2s(intro_beats), 3)})
+    if climax_bar is not None:
+        sections.append({"name": "climax", "start_bar": intro_bars + climax_bar, "bars": 2,
+                         "start_s": round(b2s(intro_beats + climax_bar * bpb), 3), "time": bar_time(climax_bar),
+                         "tension": round(float(tens[climax_bar]), 3)})
+    if add_ending:
+        sections.append({"name": "outro", "start_bar": intro_bars + n_bars, "bars": (total_data - end_data) // bpb,
+                         "start_s": round(b2s(outro_start), 3)})
     doc = {
+        "style": style, "quantize": quantize,
         "zone": zone_label, "bbox": list(bbox), "surface": surface, "palette": pal_name,
-        "key": key, "scale": scale, "bpm": bpm, "beats_per_bar": bpb, "n_bars": n_bars,
-        "total_beats": total_beats, "duration_s": round(total_beats * 60 / bpm, 2),
+        "key": key, "scale": scale, "bpm": bpm, "beats_per_bar": bpb,
+        "n_bars": n_bars, "intro_bars": intro_bars, "total_beats": total_beats,
+        "duration_s": round(b2s(total_beats), 2),
+        "tempo_map": [{"beat": tb, "bpm": round(tp, 2)} for tb, tp in tmap],
         "time_start": bar_time(0), "time_end": bar_time(n_bars - 1),
         "harmony_source": hsrc or "progression",
-        "bars": [{"index": b, "start_beat": b * bpb, "time": bar_time(b),
-                  "chord": None if h is None else h["name"]} for b, h in enumerate(chords)],
+        "sections": sections,
+        "bars": [{"index": b, "start_beat": intro_beats + b * bpb, "start_s": round(b2s(intro_beats + b * bpb), 3),
+                  "time": bar_time(b), "chord": None if h is None else h["name"],
+                  "tension": round(float(tens_info[b]), 3), "mode": modes[b], "climax": b == climax_bar}
+                 for b, h in enumerate(chords)],
         "instruments": {p["var"]: {
             "name": p["cfg"]["name"], "role": p["cfg"]["role"], "program": p["cfg"]["program"],
             "channel": p["cfg"]["channel"], "pan": p["cfg"]["pan"], "register": [p["cfg"]["low"], p["cfg"]["high"]],
-            "units": series[p["var"]]["meta"].get("units"),
+            "units": series[p["var"]]["meta"].get("units"), "source": series[p["var"]]["meta"].get("source"),
             "values_per_beat": [None if not np.isfinite(x) else round(float(x), 4) for x in series[p["var"]]["values"]],
             "presence_per_beat": [round(float(x), 3) for x in p["pres"]],
+            "pitch_range": [min((n[0] for n in p["notes"]), default=None), max((n[0] for n in p["notes"]), default=None)],
+            "anomaly_z_per_bar": [None if not np.isfinite(x) else round(float(x), 2) for x in series[p["var"]]["bar_z"]],
             "levels_per_bar": [int(x) for x in series[p["var"]]["levels"]],
             "bars_playing": int(sum(l > 0 for l in series[p["var"]]["levels"])),
-            "notes": [{"pitch": n[0], "start": n[1], "duration": n[2], "velocity": n[3]} for n in p["notes"]],
+            "notes": [{"pitch": n[0], "start": round(n[1], 4), "duration": round(n[2], 4), "velocity": n[3],
+                       "time_s": round(b2s(n[1]), 4), "duration_s": round(b2s(n[1] + n[2]) - b2s(n[1]), 4)}
+                      for n in p["notes"]],
         } for p in parts},
         "stats": {"notes_total": sum(len(p["notes"]) for p in parts),
                   "polyphony_mean": round(float(grid[grid > 0].mean()), 2) if (grid > 0).any() else 0,
-                  "polyphony_max": int(grid.max())},
+                  "polyphony_max": int(grid.max()),
+                  "tense_bars": int(sum(t_ >= 0.5 for t_ in tens_info)), "max_tension": round(float(tens_info.max()), 3)},
     }
     paths["json"].write_text(json.dumps(doc))
 
@@ -767,19 +1118,24 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
         log(f"  {p['cfg']['name']:26s} notes {len(p['notes']):4d}  bars playing {sum(l > 0 for l in lv):3d}/{n_bars}"
             f"  levels {''.join(str(min(l, 9)) for l in lv[:32])}")
     log(f"simultaneous notes: mean {doc['stats']['polyphony_mean']}, max {doc['stats']['polyphony_max']}")
+    log(f"style: {style} (quantize={quantize})")
+    log("tension: " + "".join(" .:-=+*#%@"[min(9, int(t_ * 9.99))] for t_ in tens_info[:96]) +
+        f"   (max {tens_info.max():.2f}, {doc['stats']['tense_bars']} tense bars)")
+    log("form: " + " | ".join(f"{s_['name']} @ {s_['start_s']}s" for s_ in sections) + f" | end {doc['duration_s']}s")
     log(f"wrote {paths['midi']}  (+ stems/, .json)")
 
     if preview:
         paths["score_png"] = out / f"{name}_score.png"
         paths["preview_wav"] = out / f"{name}_preview.wav"
         score_png(parts, chords, total_beats, bpb, paths["score_png"],
-                  f"Earth Orchestra - {zone_label} ({surface}) - {pal_name} palette - {key} {scale}")
+                  f"Earth Orchestra - {zone_label} ({surface}) - {style} style - {pal_name} palette - {key} {scale}",
+                  intro_beats=intro_beats, tension=tens_info)
         render_wav(parts, paths["preview_wav"], bpm, total_beats)
         log(f"wrote {name}_score.png and {name}_preview.wav")
     if render:
         import render_audio
         sf2 = render_audio.ensure_soundfont(render_audio.DEFAULT_SF2)
-        x, sr = render_audio.render(paths["midi"], sf2, reverb=reverb)
+        x, sr = render_audio.render(paths["midi"], sf2, reverb=reverb, engine=audio_engine)
         wav = out / f"{name}.wav"
         render_audio.save_wav(x, sr, wav)
         paths["audio"] = wav
@@ -788,7 +1144,9 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
             if mp3:
                 wav.unlink()
                 paths["audio"] = mp3
-        log(f"wrote {paths['audio'].name}  (GeneralUser GS, {len(x) / sr:.0f} s)")
+        import sampler
+        eng = "VSCO 2 CE orchestral samples + GeneralUser GS" if (audio_engine != "sf2" and sampler.vsco_available()) else "GeneralUser GS"
+        log(f"wrote {paths['audio'].name}  ({eng}, {len(x) / sr:.0f} s)")
     return {"name": name, "doc": doc, "paths": paths}
 
 
@@ -825,6 +1183,13 @@ def main():
                     help="high-quality audio with the GeneralUser GS SoundFont + hall reverb (render_audio.py)")
     ap.add_argument("--mp3", action="store_true", help="with --render: write MP3 instead of WAV (needs ffmpeg)")
     ap.add_argument("--reverb", type=float, default=0.28)
+    ap.add_argument("--style", choices=["data", "musical"], default="data",
+                    help="data (default): every note follows the data; musical: orchestral arrangement")
+    ap.add_argument("--quantize", choices=["scale", "pentatonic", "chromatic"], default="scale",
+                    help="pitch grid in data style (chromatic = finest resolution)")
+    ap.add_argument("--no-markers", action="store_true", help="data style: no anomaly triangle/woodblock")
+    ap.add_argument("--engine", choices=["auto", "vsco", "sf2"], default="auto",
+                    help="audio: auto = VSCO 2 CE samples if downloaded (python music/sampler.py --download), else SoundFont")
     a = ap.parse_args()
 
     if a.list_palettes:
@@ -846,7 +1211,8 @@ def main():
                 add_ending=not a.no_ending, palette=a.palette,
                 only=a.only.split(",") if a.only else None, exclude=a.exclude.split(",") if a.exclude else None,
                 seed=a.seed, out_dir=a.out, name=a.name, preview=a.preview, render=a.render,
-                reverb=a.reverb, audio_format="mp3" if a.mp3 else "wav", verbose=True)
+                reverb=a.reverb, audio_format="mp3" if a.mp3 else "wav", verbose=True,
+                style=a.style, quantize=a.quantize, markers=not a.no_markers, audio_engine=a.engine)
     except ComposeError as e:
         sys.exit(f"error: {e}")
 

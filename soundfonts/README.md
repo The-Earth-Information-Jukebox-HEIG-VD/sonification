@@ -1,6 +1,31 @@
 # Sounds: what we use and why
 
-## Used now: GeneralUser GS (SoundFont, 32 MB)
+## Main engine: VSCO 2 Community Edition (real orchestral recordings)
+- By Versilian Studios: https://versilian-studios.com/vsco-community/, repo https://github.com/sgossner/VSCO-2-CE (branch `SFZ`)
+- **License: CC0** (public domain). Use it any way you like, including in commercial works. The only request is not to sell the samples themselves as a sample library.
+- We download **only the 188 samples our instruments use (~440 MB)**, once, into `soundfonts/vsco/` (not committed):
+  ```bash
+  pip install soundfile
+  python music/sampler.py --download
+  ```
+- `music/sampler.py` is a small SFZ sampler (numpy): it picks the right recording per note and loudness, pitch-shifts it to the exact note, applies attack/release, and loops long sustained notes with a crossfade. Measured tuning: within ±6 cents (xylophone corrected by −15 cents, because its recordings are sharp).
+- **Hybrid rendering** (`--engine auto`, the default): instruments with a VSCO recording use it; anything else (regional palettes, the anomaly-marker drums) uses GeneralUser GS. Each VSCO part is **loudness-matched to its SoundFont version** (within 0.1 dB), so the mix balance stays the same.
+- Cost: about 10 s to render a 2-minute piece (versus about 4 s with the SoundFont only).
+
+| part | GM program | VSCO 2 CE instrument |
+|---|---|---|
+| Temperature (chords) | 0 | Upright Piano |
+| Rain (melody) | 48 | Violin Section sustain (vibrato); short notes use the real **Violin Section tremolo** samples |
+| CO₂ (bass) | 43 | Solo Contrabass sustain |
+| Dust (melody) | 73 | Flute sustain (vibrato) |
+| Smoke (melody) | 60 | French Horn sustain |
+| Lightning | 13 | Xylophone |
+
+`--engine sf2` forces the SoundFont only; `--engine vsco` downloads the samples if they're missing.
+
+## Fallback: GeneralUser GS
+
+(SoundFont, 32 MB)
 - By S. Christian Collins: https://www.schristiancollins.com/generaluser, repo https://github.com/mrbumpy409/GeneralUser-GS
 - **License:** free to use without restriction for music creation, private or commercial, and allowed inside software projects (full text in `GeneralUser-GS_LICENSE.txt`, downloaded with the SoundFont).
 - Why: General MIDI compatible (our MIDI program numbers work as-is), small, consistently ranked among the best free GM banks for orchestral sounds, and it renders from Python in seconds.
@@ -9,12 +34,12 @@
 Instruments used (GM program → GeneralUser preset):
 | part | program | preset |
 |---|---|---|
-| Temperature (melody) | 49 | Slow Strings (violin section, smoother than the solo-violin preset 40) |
-| Rain | 45 | Pizzicato Strings |
-| Dust | 0 | Grand Piano |
-| Smoke | 57 | Trombone |
-| Lightning | 47 | Timpani |
-| CO₂ | 43 | Double Bass |
+| Temperature (chords) | 0 | Grand Piano |
+| CO₂ (bass) | 43 | Double Bass |
+| Rain (melody) | 48 | Fast Strings (violins) |
+| Dust (melody) | 73 | Flute |
+| Smoke (melody) | 60 | French Horns |
+| Lightning | 13 | Xylophone |
 
 ## Render
 ```bash

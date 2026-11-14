@@ -3,22 +3,24 @@
 The music side of the NASA Space Apps 2026 "Earth Information Jukebox" challenge: turning NASA EIC intensity maps into an orchestra, with one instrument per variable.
 
 ```
-simulation/   fake intensity maps for every variable + the data contract (INTENSITY_MAP_SPEC.md)
-soundfonts/   free sampled instruments (GeneralUser GS, auto-downloaded) + licenses
+simulation/   realistic dataset (real NASA/NOAA data) + simulated maps + the data contract (INTENSITY_MAP_SPEC.md)
+soundfonts/   VSCO 2 CE orchestral samples (CC0) + GeneralUser GS fallback, auto-downloaded; licenses
 backend/      FastAPI server: POST /api/compose -> score JSON + MIDI + MP3 (see backend/API.md)
 music/        zone_to_midi.py : one variable  -> time series -> chords -> MIDI
               orchestra.py    : all variables -> one multi-track score
-              render_audio.py : MIDI -> WAV with real samples + hall reverb
+              sampler.py      : SFZ sampler for the VSCO orchestral recordings
+              render_audio.py : MIDI -> WAV/MP3 (VSCO samples + SoundFont fallback) + hall reverb
 ```
 
 Quick start:
 ```bash
 pip install -r requirements.txt
-python simulation/simulate_variables.py --scenario both --warming 0.5 --years 2 --frames 24
-pip install --no-deps tinysoundfont          # for good-quality audio rendering
-python music/orchestra.py simulation/output/sim_both_24f_1deg_ --zone india --preview --render
+python simulation/build_realistic_dataset.py   # REAL NASA GISTEMP + NOAA CO2 (2015 -> today)
+pip install --no-deps tinysoundfont          # audio rendering
+python music/sampler.py --download           # real orchestral samples (VSCO 2 CE, CC0, ~440 MB, once)
+python music/orchestra.py simulation/output/real_2015_2026_1deg_ --zone switzerland --start 2022-01 --end 2024-12 --render --mp3
 ```
-Listen to `music/output/orchestra_india_all.wav` (sampled instruments), or open `music/output/orchestra_india_all.mid` in any DAW (GarageBand, Ableton, Logic, MuseScore…). Every instrument has its own track. Examples are in `music/examples/`.
+Listen to `music/output/orchestra_switzerland_all.mp3`, or open the `.mid` in any DAW (GarageBand, Ableton, Logic, MuseScore…). Every instrument has its own track. Examples are in `music/examples/`.
 
 ## Backend API (for the frontend)
 ```bash

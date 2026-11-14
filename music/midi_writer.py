@@ -64,17 +64,27 @@ class MidiFile:
     def __init__(self, bpm: float = 90, time_sig=(4, 4)):
         self.bpm, self.time_sig = bpm, time_sig
         self.tracks: list[Track] = []
+        self.tempo_changes: list[tuple[float, float]] = []   # (beat, bpm) after the initial tempo
 
     def add_track(self, name: str, program: int = 0, channel: int = 0) -> Track:
         t = Track(name, program, channel)
         self.tracks.append(t)
         return t
 
+    def tempo(self, beat: float, bpm: float):
+        """Tempo change at `beat` (e.g. a ritardando = several decreasing changes)."""
+        self.tempo_changes.append((beat, bpm))
+
     def save(self, path):
         tempo = int(60_000_000 / self.bpm)
         num, den = self.time_sig
         cond = bytearray(b"\x00\xff\x51\x03" + tempo.to_bytes(3, "big"))
         cond += b"\x00\xff\x58\x04" + bytes([num, den.bit_length() - 1, 24, 8])
+        last = 0
+        for beat, bpm in sorted(self.tempo_changes):
+            tick = int(round(beat * TPQ))
+            cond += _vlq(tick - last) + b"\xff\x51\x03" + int(60_000_000 / bpm).to_bytes(3, "big")
+            last = tick
         cond += b"\x00\xff\x2f\x00"
         chunks = [b"MTrk" + struct.pack(">I", len(cond)) + bytes(cond)]
         chunks += [t.to_bytes() for t in self.tracks]

@@ -46,28 +46,57 @@ python music/orchestra.py simulation/output/sim_both_24f_1deg_ --zone sahara --k
 python music/orchestra.py simulation/output/sim_both_24f_1deg_ --zone arctic --only surface_temperature,co2
 ```
 
-## 1. Orchestration: register = role
-Arranged the way a conductor would: the most continuous and important variable sings the melody up high, the slowest and most cumulative one is the foundation down low, and punctual events become rhythm.
+## 0. Two styles: `data` (default) and `musical`
+| | **`style="data"` (default)** | `style="musical"` |
+|---|---|---|
+| goal | hear the data as precisely as possible | a pleasant orchestral piece that tells the story |
+| pitch | **= the variable's value**, linear onto the scale grid of the instrument's register (`quantize`: `scale`, `pentatonic` or `chromatic` for the finest resolution) | chord tones from a shared harmony, smoothed contour |
+| loudness / density | = the amount (rain plucks per beat, lightning hits per beat, dust and smoke loudness), deterministic | role-based patterns (arpeggios, comping, rolls) |
+| anomalies | **markers**: triangle on unusually hot months, woodblock on cold ones (≥ 1.5 σ) | minor mode, 7ths, agitation, climax |
+| added material | none (no harmony, intro, outro, humanisation) | intro, climax, ritardando outro, phrasing |
+| fidelity: correlation(value, pitch) on real Swiss data 2022–24 | temperature (chord root) **≥ 0.99**, CO₂ **0.996**, rain **0.995** | 0.92 / 0.46 / 0.22 |
 
-| voice (high → low) | variable | instrument | why | rhythmic values |
+Everything below about harmony, form and expression applies to `style="musical"`. The instrument and register table (section 1) applies to both.
+
+## 1. Orchestration: always on = foundation, sometimes = melody
+Variables that are **present all the time** (temperature, CO₂) form the harmonic bed. Variables that **only appear sometimes** (rain, dust, smoke, lightning) carry the **melodies** when they happen, so a melody entering is itself information ("it's raining", "there's dust"). Rain and dust rarely happen together (wet places versus dry places), so their melodies naturally take turns.
+
+| voice | variable | instrument | data style (default) | musical style |
 |---|---|---|---|---|
-| **Melody** G4–G6 | temperature | **Violins** | the main, continuous story: the line you follow | one legato line; quarters, halves and tied notes; a breath every 4 bars |
-| **Rhythm** C4–A5 | precipitation | **Pizzicato strings** | rain = many small drops | chord arpeggio: half → quarter → eighth notes as rain increases |
-| **Harmony** C3–G4 | dust | **Piano** | slow, diffuse haze filling the middle | chord: whole → half → quarter notes; voice-led |
-| **Swell** F2–C4 | smoke | **Trombones** | episodic and threatening | held open fifth with a crescendo; a suspended 4th (unresolved) when smoke is thick |
-| **Percussion** E2–G3 | lightning | **Timpani** (tuned to the chord) | sudden events | beat 1 → beats 1 & 3 → every beat → roll; accented downbeat when a storm arrives |
-| **Bass** E1–D3 | CO₂ | **Contrabass** | slowest and cumulative: the ground everything stands on | one root per bar, smallest leap |
+| **Harmony** C3–C5 | temperature (always) | **Piano, chords** | a chord on every beat; **its root = the temperature** (diatonic triad), accent on each bar | comping on the shared harmony, register follows temperature |
+| **Bass** E1–D3 | CO₂ (always) | **Contrabass** | pitch = value, held while unchanged | one root per bar |
+| **Melody** G4–G6 | rain (sometimes) | **Violins** | pitch = value, loudness = amount, **tremolo** (up to 4 notes/beat) when it pours | gated legato line |
+| **Melody** C5–A6 | dust (sometimes) | **Flute** | airy line while dust is present | gated legato line |
+| **Melody** F3–D5 | smoke (sometimes) | **French horns** | line while there are fires | gated legato line |
+| **Sparkle** F5–F7 | lightning (sometimes) | **Xylophone** | hits per beat = flash density, pitch = value | beat patterns, roll before the climax |
 
 ## 2. Time: everything lives in bars
 - **1 frame = 1 bar** of 4 beats (24 months → 24 bars), plus a 2-bar final cadence on the tonic.
 - **Harmony:** one chord every **2 bars**, always changing on a bar line. CO₂ climbs a **tension ladder** I → vi → IV → ii → V (in minor: i → VI → iv → VII → v). Low CO₂ is home, high CO₂ is the dominant. Hysteresis keeps small wiggles from changing the chord. The contrabass plays that root, and every instrument takes its notes from the chord (the violins may add scale passing notes on weak beats).
 - **Entries and exits are decided per bar** with hysteresis (enter at `gate`, leave below 70% of it). Density levels are per bar too, so instruments never flicker on and off beat by beat.
-- Each section has **its own rhythmic value** (bass = whole notes, piano = whole/half/quarter, pizzicato = up to 8ths, timpani = beats). Parts interlock instead of piling up. The script prints a polyphony check: typically 3–6 notes sound at once, 8 at most.
+- Each section has **its own rhythmic value** (bass = whole notes, piano = whole/half/quarter, melodies = quarters to halves, xylophone = beats). Parts interlock instead of piling up. The script prints a polyphony check: typically 3–6 notes sound at once, 8 at most.
 - **Contour vs presence** (`--mapping hybrid`): pitch follows the value *relative to its range in the zone*, so every line is melodic. Entries and loudness follow the *absolute* amount: no dust over Europe means no piano.
 
 Without a CO₂ map, temperature picks the chords (`--harmony surface_temperature`). With neither, the harmony falls back to I–vi–IV–V. Everything above can be tuned in the `ORCHESTRA` table: register, gain, gate, density thresholds, mix level and pan.
 
-## 3. Regional palettes (fun mode)
+## 3. Storytelling: anomalies, form, expression
+**Anomalies → tension.** For every variable the zone's series is compared to its **seasonal normal** (mean + annual cycle fitted on a 3-year reference period, like a climatology baseline). The departure, as a robust z-score (log scale for skewed fields like rain and lightning), becomes **tension per bar**: temperature counts both ways (too hot or too cold), smoke, lightning and dust only above normal. CO₂ is excluded, because its rise is already heard in the bass and the chord ladder.
+- tension ≥ 0.5 → the harmony **turns minor** (borrowed chords: I→i, IV→iv, vi→♭VI, V stays major), with hysteresis so it doesn't flicker
+- tension ≥ 0.6 → **agitation**: the melodies move in restless eighth notes, the contrabass plays a driving ostinato, the piano pulses faster
+- tension ≥ 0.75 → the chords get a **7th** (more dissonance)
+- louder overall, and fuller CC11 swells
+
+**Form.**
+- **Intro, "meet the orchestra":** the instruments that actually play in this zone enter one bar at a time (contrabass → piano → xylophone → then the melodies: violins, flute, horns), then a bar on V leads into the data. The JSON lists each entry with its time, so the UI can announce "CO₂ → contrabass" (good for accessibility).
+- **Climax:** the most anomalous bar (ties go to temperature). Everyone louder for 2 bars, melodies doubled an octave up, xylophone roll into it.
+- **Outro:** a 2-bar tonic cadence with a **ritardando** (tempo map down to 70%). Every note in the JSON also has `time_s` and `duration_s` in real seconds.
+
+**Expression.** Phrase hairpins (crescendo to bar 3, relax at bar 4), CC11 swells inside long string notes, and small human timing and velocity variations (`humanize` 0–1).
+
+On real data the climaxes land on real events: Switzerland → Feb 2024 (record-warm winter), El Niño region → Nov 2015, global → Sep 2023 (record month), India → spring 2022 heatwave.
+Options: `compose(..., intro=True, tension=True, climax=True, humanize=0.5)`.
+
+## 4. Regional palettes (fun mode)
 `--palette auto` swaps in traditional instruments for the zone. The roles, registers and timing stay the same; only the band changes (plus a matching default mode, unless you pass `--scale`).
 ```bash
 python music/orchestra.py simulation/output/sim_both_24f_1deg_ --zone switzerland --palette auto --render
@@ -99,6 +128,8 @@ Instruments in parentheses in the code are the closest General MIDI sound (e.g. 
 - `orchestra_<zone>_<surface>_stems/<variable>.mid`: one MIDI per instrument
 - `.json`: bars with times and chords, plus per-instrument values per beat, levels per bar and notes (for the web player)
 - with `--preview`: `_score.png` (lanes with bar lines and chord names) and `_preview.wav` (rough built-in synth)
-- with `--render`: **`<name>.wav` with real sampled instruments** (GeneralUser GS SoundFont + concert-hall reverb, see `../soundfonts/README.md`). Any MIDI file can also be rendered with `python music/render_audio.py file.mid`
+- with `--render`: **`<name>.wav` (or `--mp3`) with real orchestral recordings**: VSCO 2 Community Edition samples (CC0) when downloaded (`python music/sampler.py --download`), the GeneralUser GS SoundFont otherwise, plus a concert-hall reverb (see `../soundfonts/README.md`). Any MIDI file can also be rendered with `python music/render_audio.py file.mid [--engine auto|vsco|sf2]`
 
-Good demo zones: `india` (monsoon pizzicato + storm timpani), `sahara` (dust piano + storms), `europe` (summer heatwave: smoke trombones + thunder), `arctic` (violins + contrabass, CO₂ breathing), `global`.
+Demo pieces on **real data** (`music/examples/real/`): Switzerland 2022–24, El Niño 2015–17, global 2022–24, India 2021–23, each as `*_data` (default style) and `*_musical`.
+
+Good zones to try: `india` (monsoon violins, pre-monsoon dust flute, storm xylophone), `sahara` (flute almost always: dust), `europe` (summer heat), `arctic`, `global`.

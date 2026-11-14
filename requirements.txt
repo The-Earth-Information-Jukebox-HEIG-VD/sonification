@@ -3,5 +3,7 @@ matplotlib
 pillow
 fastapi
 uvicorn
+netCDF4
+soundfile
 # audio rendering: pip install --no-deps tinysoundfont   (ffmpeg needed for MP3)
 # tests: pip install httpx pytest

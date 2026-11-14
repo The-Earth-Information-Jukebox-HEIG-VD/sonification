@@ -23,6 +23,8 @@ from pathlib import Path
 import numpy as np
 
 HERE = Path(__file__).resolve().parent
+import sys as _sys
+_sys.path.insert(0, str(HERE))
 SF_DIR = HERE.parent / "soundfonts"
 DEFAULT_SF2 = SF_DIR / "GeneralUser-GS.sf2"
 GUGS_REPO = "https://github.com/mrbumpy409/GeneralUser-GS.git"
@@ -72,20 +74,36 @@ def fft_convolve(x, h):
     return np.fft.irfft(np.fft.rfft(x, nfft) * np.fft.rfft(h, nfft), nfft)[:n]
 
 
-def render(midi_path, sf2: Path, sr=44100, reverb=0.28, gain_db=-6.0, tail_s=3.0):
+def render(midi_path, sf2: Path, sr=44100, reverb=0.28, gain_db=-6.0, tail_s=3.0, engine="auto"):
+    """engine: 'auto' (VSCO samples where available + SoundFont for the rest), 'vsco', or 'sf2'."""
     import tinysoundfont as tsf
 
+    events = sorted(tsf.midi.load(str(midi_path)), key=lambda e: e.t)
+    end_t = (events[-1].t if events else 0) + tail_s
+    n_out = int(end_t * sr) + sr
+
+    # which channels go to the VSCO sampler?
+    vsco_ch, programs = {}, {}
+    use_vsco = False
+    if engine in ("auto", "vsco"):
+        import sampler
+        use_vsco = sampler.vsco_available() or (engine == "vsco" and sampler.ensure_vsco())
+    for ev in events:
+        if type(ev.action).__name__ == "ProgramChange" and ev.channel not in programs:
+            programs[ev.channel] = ev.action.program
+    if use_vsco:
+        vsco_ch = {ch: p for ch, p in programs.items() if ch != 9 and p in sampler.GM_TO_VSCO}
+
+    # ---- SoundFont part (every channel not handled by VSCO)
     synth = tsf.Synth(gain=gain_db, samplerate=sr)
     sfid = synth.sfload(str(sf2))
-    events = sorted(tsf.midi.load(str(midi_path)), key=lambda e: e.t)
-    # every channel starts on piano so notes before any program change still sound
     for ch in range(16):
         synth.program_select(ch, sfid, 128 if ch == 9 else 0, 0, is_drums=(ch == 9))
-
-    end_t = (events[-1].t if events else 0) + tail_s
-    out = np.zeros((int(end_t * sr) + sr, 2), np.float32)
+    out = np.zeros((n_out, 2), np.float32)
     pos = 0
     for ev in events:
+        if ev.channel in vsco_ch:
+            continue
         target = int(ev.t * sr)
         if target > pos:
             out[pos:target] = np.frombuffer(synth.generate(target - pos), dtype=np.float32).reshape(-1, 2)
@@ -106,6 +124,68 @@ def render(midi_path, sf2: Path, sr=44100, reverb=0.28, gain_db=-6.0, tail_s=3.0
     if pos < len(out):
         out[pos:] = np.frombuffer(synth.generate(len(out) - pos), dtype=np.float32).reshape(-1, 2)
 
+    # ---- VSCO part: real orchestral recordings, each part loudness-matched to its SoundFont rendering
+    def sf2_channel_rms(ch):
+        syn = tsf.Synth(gain=gain_db, samplerate=sr)
+        sid = syn.sfload(str(sf2))
+        syn.program_select(ch, sid, 0, 0)
+        buf_, p_ = np.zeros((n_out, 2), np.float32), 0
+        for ev in events:
+            if ev.channel != ch:
+                continue
+            tg = int(ev.t * sr)
+            if tg > p_:
+                buf_[p_:tg] = np.frombuffer(syn.generate(tg - p_), dtype=np.float32).reshape(-1, 2); p_ = tg
+            a_, k_ = ev.action, type(ev.action).__name__
+            if k_ == "NoteOn":
+                syn.noteon(ch, a_.key, a_.velocity) if a_.velocity > 0 else syn.noteoff(ch, a_.key)
+            elif k_ == "NoteOff":
+                syn.noteoff(ch, a_.key)
+            elif k_ == "ProgramChange":
+                syn.program_select(ch, sid, 0, a_.program)
+            elif k_ == "ControlChange":
+                syn.control_change(ch, a_.control, a_.control_value)
+        if p_ < n_out:
+            buf_[p_:] = np.frombuffer(syn.generate(n_out - p_), dtype=np.float32).reshape(-1, 2)
+        return float(np.sqrt((buf_ ** 2).mean()))
+
+    for ch, prog in vsco_ch.items():
+        sfz = sampler.GM_TO_VSCO[prog]
+        alt = sampler.SHORT_NOTE_ALT.get(prog)
+        gain = 1.0
+        cc = {7: [(0.0, 100)], 10: [(0.0, 64)], 11: [(0.0, 127)]}
+        on, notes = {}, []
+        for ev in events:
+            if ev.channel != ch:
+                continue
+            a, kind = ev.action, type(ev.action).__name__
+            if kind == "ControlChange" and a.control in cc:
+                cc[a.control].append((ev.t, a.control_value))
+            elif kind == "NoteOn" and a.velocity > 0:
+                on.setdefault(a.key, []).append((ev.t, a.velocity))
+            elif kind in ("NoteOff", "NoteOn"):
+                if on.get(a.key):
+                    t0, v = on[a.key].pop(0)
+                    notes.append((t0, ev.t - t0, a.key, v))
+        buf = np.zeros((n_out, 2), np.float32)
+        for t0, dur, key, vel in notes:
+            name = alt[0] if (alt and dur < alt[1]) else sfz
+            y = sampler.render_note(name, key, vel, dur, sr) * gain
+            i0 = int(t0 * sr)
+            i1 = min(n_out, i0 + len(y))
+            buf[i0:i1] += y[: i1 - i0]
+        tt = np.arange(n_out) / sr
+        for ctl in (7, 11):                                   # volume and expression curves
+            pts = sorted(cc[ctl])
+            curve = np.interp(tt, [p[0] for p in pts], [p[1] / 127 for p in pts])
+            buf *= (curve ** (2 if ctl == 7 else 1.5))[:, None]
+        pan = cc[10][-1][1] / 127 if len(cc[10]) > 1 else 0.5
+        buf[:, 0] *= min(1.0, 2 * (1 - pan)); buf[:, 1] *= min(1.0, 2 * pan)
+        ref, mine = sf2_channel_rms(ch), float(np.sqrt((buf ** 2).mean()))
+        if ref > 1e-7 and mine > 1e-7:
+            buf *= ref / mine                                 # same loudness as the designed GM mix
+        out += buf
+
     dry = out.astype(np.float64)
     if reverb > 0:
         ir = hall_ir(sr)
@@ -113,7 +193,6 @@ def render(midi_path, sf2: Path, sr=44100, reverb=0.28, gain_db=-6.0, tail_s=3.0
         mixed = (1 - reverb) * dry + reverb * wet * 1.4
     else:
         mixed = dry
-    # trim trailing silence, normalise to -1 dBFS
     nz = np.where(np.abs(mixed).max(axis=1) > 1e-4)[0]
     mixed = mixed[: (nz[-1] + 1 if len(nz) else len(mixed))]
     mixed *= 0.89 / (np.abs(mixed).max() + 1e-9)
@@ -144,10 +223,12 @@ def main():
     ap.add_argument("--reverb", type=float, default=0.28, help="0 = dry, 0.5 = very wet")
     ap.add_argument("--sr", type=int, default=44100)
     ap.add_argument("--out", help="output WAV (single input only)")
+    ap.add_argument("--engine", choices=["auto", "vsco", "sf2"], default="auto",
+                    help="auto: VSCO 2 CE orchestral samples where available, SoundFont for the rest")
     a = ap.parse_args()
     sf2 = ensure_soundfont(Path(a.sf2))
     for m in a.midi:
-        x, sr = render(m, sf2, a.sr, a.reverb)
+        x, sr = render(m, sf2, a.sr, a.reverb, engine=a.engine)
         out = Path(a.out) if a.out and len(a.midi) == 1 else Path(m).with_suffix(".wav")
         save_wav(x, sr, out)
         print(f"{m} -> {out}  ({len(x) / sr:.1f} s)")

@@ -29,7 +29,7 @@ def test_options_and_datasets():
 
 
 def test_compose_zone_with_audio_and_cache():
-    body = {"zone": "india", "audio": True, "audio_format": "mp3"}
+    body = {"zone": "india", "start": "2022-01", "end": "2023-12", "audio": True, "audio_format": "mp3"}
     t = time.perf_counter()
     r = client.post("/api/compose", json=body)
     first = time.perf_counter() - t
@@ -54,16 +54,66 @@ def test_compose_zone_with_audio_and_cache():
 
 
 def test_compose_bbox_time_window_no_audio():
-    r = client.post("/api/compose", json={"bbox": [45.8, 47.8, 5.9, 10.5], "start": "2024-06", "end": "2024-12",
+    r = client.post("/api/compose", json={"dataset": "sim_both_24f_1deg", "bbox": [45.8, 47.8, 5.9, 10.5],
+                                          "start": "2024-06", "end": "2024-12",
                                           "audio": False, "variables": ["surface_temperature", "co2"]})
     assert r.status_code == 200, r.text
     s = r.json()["score"]
-    assert s["zone"] == "custom" and s["n_bars"] == 7 and set(s["instruments"]) == {"surface_temperature", "co2"}
+    assert s["zone"] == "custom" and s["n_bars"] == 7 and set(s["instruments"]) - {"anomaly_markers"} == {"surface_temperature", "co2"}
+    assert s["intro_bars"] == 0 and s["style"] == "data"                   # data style: no intro
     assert r.json()["files"]["audio"] is None
 
 
+def test_real_dataset_tension_and_form():
+    ds = client.get("/api/datasets").json()
+    real = [d for d in ds["datasets"] if not d["simulated"]]
+    if not real:
+        print("skip: no real dataset (python simulation/build_realistic_dataset.py)"); return
+    assert ds["default"] == real[0]["id"]
+    r = client.post("/api/compose", json={"dataset": real[0]["id"], "zone": "switzerland", "style": "musical",
+                                          "start": "2022-01", "end": "2024-12", "audio": False})
+    assert r.status_code == 200, r.text
+    s = r.json()["score"]
+    names = [x["name"] for x in s["sections"]]
+    assert names[0] == "intro" and "data" in names and "outro" in names
+    climax = [x for x in s["sections"] if x["name"] == "climax"]
+    assert climax and climax[0]["time"].startswith("2024-02"), climax      # record-warm Feb 2024
+    assert any(b["mode"] == "minor" for b in s["bars"]) and any(b["mode"] == "major" for b in s["bars"])
+    n = next(iter(s["instruments"].values()))["notes"][0]
+    assert "time_s" in n and "duration_s" in n
+    assert s["duration_s"] > s["sections"][-1]["start_s"]                   # ritardando outro included
+    flat = client.post("/api/compose", json={"dataset": real[0]["id"], "zone": "switzerland", "start": "2022-01",
+                                             "end": "2024-12", "audio": False, "intro": False, "tension": False,
+                                             "style": "musical",
+                                             "humanize": 0}).json()["score"]
+    assert flat["intro_bars"] == 0 and all(b["mode"] == "major" for b in flat["bars"])
+
+
+def test_data_style_follows_the_data():
+    import numpy as np
+    r = client.post("/api/compose", json={"zone": "switzerland", "start": "2022-01", "end": "2024-12", "audio": False})
+    assert r.status_code == 200, r.text
+    s = r.json()["score"]
+    assert s["style"] == "data" and s["intro_bars"] == 0 and all(b["chord"] is None for b in s["bars"])
+    assert [x["name"] for x in s["sections"]] == ["data"]
+    inst = s["instruments"]["surface_temperature"]
+    vals = np.array([v if v is not None else np.nan for v in inst["values_per_beat"]])
+    root = np.full(len(vals), np.nan)                 # temperature = piano chords: the ROOT follows the value
+    for n in inst["notes"]:
+        k = int(n["start"])
+        if 0 <= k < len(vals):
+            root[k] = n["pitch"] if np.isnan(root[k]) else min(root[k], n["pitch"])
+    ok = np.isfinite(vals) & np.isfinite(root)
+    assert ok.mean() > 0.95 and np.corrcoef(vals[ok], root[ok])[0, 1] > 0.98
+    assert len(inst["notes"]) >= 3 * ok.sum()           # a chord (3 notes) on every beat
+    if "anomaly_markers" in s["instruments"]:
+        m = s["instruments"]["anomaly_markers"]
+        assert all(n["pitch"] in (81, 77) for n in m["notes"])
+
+
 def test_regional_palette():
-    r = client.post("/api/compose", json={"zone": "japan", "palette": "auto", "audio": False})
+    r = client.post("/api/compose", json={"dataset": "sim_both_24f_1deg", "zone": "japan", "palette": "auto",
+                                          "style": "musical", "audio": False})
     assert r.json()["score"]["palette"] == "japan" and r.json()["score"]["scale"] == "minor"
 
 
