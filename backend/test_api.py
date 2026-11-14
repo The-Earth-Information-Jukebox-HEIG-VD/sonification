@@ -15,6 +15,10 @@ client = TestClient(app)
 _ds = {d["id"]: d for d in client.get("/api/datasets").json()["datasets"]}
 MONTHLY = next((k for k in _ds if k.startswith("real_20") and _ds[k]["frames"] > 100), None) or "sim_both_24f_1deg"
 DAILY = next((k for k in _ds if k.startswith("real_daily")), None)
+# the best dataset that has the whole orchestra (the default one can hold a single real variable, e.g. real_monthly_*)
+FULL = max((k for k in _ds if {"surface_temperature", "co2"} <= set(_ds[k]["variables"])),
+           key=lambda k: (len(_ds[k]["real_variables"]), len(_ds[k]["variables"]), _ds[k]["frames"]), default=None)
+REAL_MONTHLY = next((k for k in _ds if k.startswith("real_monthly")), None)
 
 
 def test_health():
@@ -32,7 +36,8 @@ def test_options_and_datasets():
 
 
 def test_compose_zone_with_audio_and_cache():
-    body = {"zone": "india", "start": "2024-05", "end": "2024-09", "audio": True, "audio_format": "mp3"}
+    body = {"zone": "india", "start": "2024-05", "end": "2024-09", "audio": True, "audio_format": "mp3",
+            **({"dataset": FULL} if FULL else {})}
     t = time.perf_counter()
     r = client.post("/api/compose", json=body)
     first = time.perf_counter() - t
@@ -202,7 +207,7 @@ def test_sonify_frontend_contract():
     assert j2["time_period"] == "2025-01" and j2["audio_data"] is None and j2["audio_url"]
     # no dataset_id = the whole orchestra; lon is accepted for lng; a preset zone needs no points
     j3 = client.post("/api/sonify", json={"zone_id": "india", "time_period": "2024-03", "embed_audio": False,
-                                          "options": {"bpm": 96}}).json()
+                                          "options": {"bpm": 96, **({"dataset": FULL} if FULL else {})}}).json()
     assert len(j3["values"]) > 1 and j3["point_count"] == 0 and j3["cell_count"] is None
     pts = [{"lat": 46.5, "lon": 6.6}]
     assert client.post("/api/sonify", json={"points": pts, "dataset_id": ["co2", "rain"], "embed_audio": False}).status_code == 200
@@ -242,7 +247,7 @@ def test_data_style_follows_the_data():
     import numpy as np
     monthly = [d["id"] for d in client.get("/api/datasets").json()["datasets"] if d["id"].startswith("real_2015")]
     r = client.post("/api/compose", json={"zone": "switzerland", "start": "2022-01", "end": "2024-12", "audio": False,
-                                          **({"dataset": monthly[0]} if monthly else {})})
+                                          **({"dataset": monthly[0]} if monthly else {"dataset": FULL} if FULL else {})})
     assert r.status_code == 200, r.text
     s = r.json()["score"]
     assert s["style"] == "data" and s["intro_bars"] == 0 and all(b["chord"] is None for b in s["bars"])
@@ -260,6 +265,30 @@ def test_data_style_follows_the_data():
     if "anomaly_markers" in s["instruments"]:
         m = s["instruments"]["anomaly_markers"]
         assert all(n["pitch"] in (81, 77) for n in m["notes"])
+
+
+def test_real_monthly_precipitation():
+    """The team's real monthly precipitation 2000-2026 (python simulation/build_monthly_dataset.py --precip DIR)."""
+    if not REAL_MONTHLY:
+        print("skip: no real monthly dataset (python simulation/build_monthly_dataset.py --precip DIR)"); return
+    d = _ds[REAL_MONTHLY]
+    assert d["real_variables"] == ["precipitation"] and d["frames"] >= 300 and d["time_start"].startswith("2000-06")
+    # a request for precipitation at a date only this dataset covers finds it by itself
+    pts = [{"lat": 46.5, "lng": 6.6}, {"lat": 47.4, "lng": 8.5}]
+    j = client.post("/api/sonify", json={"zone_id": "ch", "dataset_id": "precipitation", "points": pts,
+                                         "time_period": "2003-05", "embed_audio": False}).json()
+    assert j["source_dataset"] == REAL_MONTHLY and j["real_data"] and j["units"] == "mm/day"
+    assert j["time_period"] == "2003-05" and j["next_time_period"] == "2004-03" and abs(j["duration_s"] - 30) < 0.05
+    # the monsoon: India is far wetter in July than in January
+    s = client.post("/api/compose", json={"dataset": REAL_MONTHLY, "zone": "india", "start": "2019-01", "end": "2019-12",
+                                          "audio": False}).json()["score"]
+    v = s["instruments"]["precipitation"]["values_per_beat"]
+    assert s["n_bars"] == 12 and v[6 * 4] > 5 * v[0] > 0
+    # a variable this dataset does not have is served by another one
+    if FULL:
+        t = client.post("/api/sonify", json={"zone_id": "europe", "dataset_id": "temperature", "embed_audio": False,
+                                             "duration_s": 6}).json()
+        assert t["source_dataset"] != REAL_MONTHLY and t["units"] == "degC"
 
 
 def test_real_daily_precipitation():

@@ -45,11 +45,12 @@ uvicorn backend.app:app --reload --port 8000
     {"dataset_id": "temperature", "variable": "surface_temperature", "label": "Temperature",
      "instrument": "Piano (chords)", "role": "harmony", "always_playing": true,
      "units": "degC", "available": true, "real_data": false,
+     "time_start": "2024-01-15T00:00:00Z", "time_end": "2025-12-15T01:30:00Z", "found_in": ["sim_both_24f_1deg"],
      "also_accepted": ["surface_temperature", "temp"], "midi_program": 0, "pitch_range": [48, 72]}
   ]
 }
 ```
-`always_playing: false` means the instrument is heard only while its phenomenon is present in the area (rain, dust, smoke, lightning). `available` says whether the server's default dataset has that variable, and `real_data` whether it is observed rather than modelled. The table is read from the orchestration in `music/orchestra.py`, so it follows any change made there.
+`always_playing: false` means the instrument is heard only while its phenomenon is present in the area (rain, dust, smoke, lightning). `available` says whether any dataset on the server has that variable; `units`, `real_data` (observed rather than modelled), `time_start` and `time_end` describe the dataset a request for it would get, and `found_in` lists every dataset that has it. The table is read from the orchestration in `music/orchestra.py`, so it follows any change made there.
 
 ## POST `/api/sonify` (points + one date → a chunk of audio)
 The frontend sends the selected points and one time period. The backend answers with 30 seconds of music starting at that period, and with the period to ask for next.
@@ -91,7 +92,8 @@ The frontend sends the selected points and one time period. The backend answers 
   "point_count": 2, "cell_count": 2,
   "aggregation": "mean",
   "time_end": "2024-12", "duration_s": 30.0,
-  "composition_id": "3f0c…", "cached": false
+  "composition_id": "3f0c…", "cached": false,
+  "source_dataset": "real_daily_2024", "real_data": true
 }
 ```
 - **`time_period`** is the date the music really starts at. It differs from the request when the requested date is before the data begins.
@@ -121,7 +123,7 @@ All fields are optional. The smallest request is `{}` (global zone, default data
 ```
 | field | type | notes |
 |---|---|---|
-| `dataset` | string | id from `/api/datasets`; default = the real data if present, otherwise the simulation |
+| `dataset` | string | id from `/api/datasets`. Left out = chosen by the server: a dataset that has the requested `variables`, covers `start` if possible, and has the most real variables |
 | `zone` | string | preset id from `/api/options` (`switzerland`, `india`, `europe`, `global`…) |
 | `cells` | `[[row, col], ...]` | **custom area selected on the map, any shape**: the positions of the selected cells on the data array. Row 0 is the top of the array (north), column 0 is the left edge (180°W). Overrides `zone` and `bbox`. Order and duplicates do not matter |
 | `cells_grid` | `[rows, cols]` | shape of the array the positions refer to. Leave it out when that is the dataset's own grid (`variables[v].grid` in `/api/datasets`, e.g. `[180, 360]`). Send it when your array has another resolution (e.g. `[720, 1440]`): the selection is rescaled onto the data |
@@ -323,6 +325,12 @@ All fields are optional. The smallest request is `{}` (global zone, default data
 }
 
 ```
+
+### New in v1.7 (the team's real monthly data, dataset chosen per request)
+- new dataset `real_monthly_2000_2026`: the extraction team's real monthly precipitation, June 2000 to November 2026 (`python simulation/build_monthly_dataset.py --precip DIR`).
+- **the server now chooses the dataset for each request** that does not name one. It takes the datasets that have every requested variable, then prefers one whose dates cover the start date, then the one with the most real variables. So `precipitation` in `2003-05` is served from `real_monthly_2000_2026`, and `temperature` from a dataset that has it. To force one, send `dataset` (`/api/compose`) or `options.dataset` (`/api/sonify`). A request with no variable and no date still gets the default dataset of `GET /api/datasets`.
+- `/api/sonify` answers with `source_dataset` (the dataset that was played) and `real_data` (whether the main variable is observed rather than modelled).
+- `/api/instruments`: `available`, `units` and `real_data` now describe the dataset a request for that variable would get, with its `time_start` and `time_end`; `found_in` lists every dataset that has the variable.
 
 ### New in v1.6 (the frontend's format, one date + a length)
 - new `POST /api/sonify` (points + one `time_period` → 30 s of audio inside the JSON, with `next_time_period`) and `GET /api/instruments` (dataset ↔ instrument); see their sections above.

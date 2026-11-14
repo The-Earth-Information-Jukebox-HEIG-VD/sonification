@@ -83,3 +83,22 @@ Input: the extraction team's file (daily, 0.25°, `precip_mmh`, `is_snow`, `date
 Each `.json` has `"frames_per_bar": 7`, so the orchestra plays **one bar per week** (2024 → 53 bars, about 2 min 47 s), and each beat is the **mean of its days** (no day skipped). Checks: Valencia flood 29 Oct 2024 = 131 mm/day; India monsoon July = 12.7 mm/day; global mean 2.54 mm/day.
 
 `output/` is generated: don't commit it (see `.gitignore`).
+
+## The team's real monthly data: `build_monthly_dataset.py`
+Turns the extraction team's monthly files (one `.npz` per year, 0.25°) into one dataset in the `INTENSITY_MAP_SPEC.md` format. Nothing is modelled: a variable is in the dataset only when the team has extracted it.
+
+```bash
+python simulation/build_monthly_dataset.py --precip ../data_processing/precipitation/monthly_2000_2026
+# -> output/real_monthly_2000_2026_precipitation.npz / .json   (318 months, 1°, about 88 MB)
+python simulation/build_monthly_dataset.py --precip DIR --res 2 --start 2015-01 --min-days 20
+python -m pytest simulation/test_build_monthly_dataset.py -q      # converter test with small made-up files
+```
+
+| variable | units | source | how |
+|---|---|---|---|
+| precipitation | mm/day | NASA GPM IMERG (GIBS layer `IMERG_Precipitation_Rate`), monthly mean | `precip_mmh` × 24, area-weighted block mean from 0.25° to `--res` |
+
+- One frame is one month, so one bar is one month (June 2000 to November 2026 = 318 bars for the whole series).
+- Months averaged over fewer than 25 days of data are listed in the `.json` as `partial_months` (October 2025: 24 days, November 2026: 13 days). `--min-days 20` drops such a month when it is the first or the last of the series.
+- `snow_days` (number of days with snow) is not converted: the snowfall instrument expects an amount in mm/day.
+- To add a variable when the team delivers it (e.g. temperature), add a line to `SOURCES` in the script.
