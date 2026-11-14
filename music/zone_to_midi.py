@@ -58,6 +58,13 @@ ZONES = {
     "north_atlantic": (40, 65, -60, 0),
     "nino34":         (-5, 5, -170, -120),   # El Niño index region
     "pacific_center": (-30, 30, 160, -120),  # crosses the dateline
+    "alps":           (44, 48.5, 5, 16),
+    "japan":          (30, 46, 129, 146),
+    "china":          (20, 45, 98, 123),
+    "andes":          (-35, 5, -80, -60),
+    "west_africa":    (4, 20, -18, 15),
+    "caribbean":      (10, 25, -85, -60),
+    "scotland_ireland": (51, 59, -11, -1),
 }
 
 SCALES = {
@@ -72,15 +79,14 @@ SCALES = {
 NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 
 # One instrument per variable (General MIDI program, channel). Extend for the orchestra.
-INSTRUMENTS = {
-    "surface_temperature": {"program": 0,  "channel": 0, "name": "Temperature - Piano"},
-    "temperature":         {"program": 0,  "channel": 0, "name": "Temperature - Piano"},
-    "precipitation":       {"program": 46, "channel": 1, "name": "Precipitation - Harp"},
-    "co2":                 {"program": 42, "channel": 2, "name": "CO2 - Cello"},
-    "aerosol":             {"program": 89, "channel": 3, "name": "Aerosols - Warm Pad"},
-    "lightning":           {"program": 47, "channel": 9, "name": "Lightning - Timpani"},
-    "salinity":            {"program": 73, "channel": 4, "name": "Salinity - Flute"},
-    "forest_height":       {"program": 71, "channel": 5, "name": "Forest - Clarinet"},
+INSTRUMENTS = {   # same instruments as orchestra.py
+    "surface_temperature": {"program": 49, "channel": 0, "name": "Temperature - Violins"},
+    "temperature":         {"program": 49, "channel": 0, "name": "Temperature - Violins"},
+    "precipitation":       {"program": 45, "channel": 1, "name": "Rain - Pizzicato Strings"},
+    "aerosol_dust":        {"program": 0,  "channel": 2, "name": "Dust - Piano"},
+    "aerosol_smoke":       {"program": 57, "channel": 3, "name": "Smoke - Trombones"},
+    "lightning":           {"program": 47, "channel": 4, "name": "Lightning - Timpani"},
+    "co2":                 {"program": 43, "channel": 5, "name": "CO2 - Contrabass"},
 }
 
 

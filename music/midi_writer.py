@@ -37,6 +37,12 @@ class Track:
         self.events.append((on, 1, bytes([0x90 | ch, pitch, velocity])))
         self.events.append((off, 0, bytes([0x80 | ch, pitch, 0])))  # offs before ons at same tick
 
+    def cc(self, controller: int, value: int, beat: float = 0.0):
+        """Control change, e.g. cc(10, 32) pan left-ish, cc(7, 100) volume."""
+        ch = self.channel & 0x0F
+        self.events.append((int(round(beat * TPQ)), 0,
+                            bytes([0xB0 | ch, controller & 0x7F, max(0, min(127, int(value)))])))
+
     def marker(self, text: str, beat: float):
         b = text.encode("utf-8")
         self.events.append((int(round(beat * TPQ)), 2, b"\xff\x06" + _vlq(len(b)) + b))

@@ -36,4 +36,21 @@ meta = json.load(open("simulation/output/temperature_sim_none_12f_1deg.json"))
 
 Note: ocean cells behave like sea-surface temperature (they never drop below about −2 °C); land cells behave like air temperature. That matches what the SVS visualizations show.
 
+## All the other variables: `simulate_variables.py`
+Generates every orchestra variable on the **same time axis** (same frames, years and scenario), named `output/<prefix>_<variable>.npz`:
+
+| variable | units | fixed range | what's modelled |
+|---|---|---|---|
+| surface_temperature | °C | −40..40 | (same as above) |
+| precipitation | mm/day | 0..20 | ITCZ following the sun, Indian/African/Amazon/Australian monsoons, storm tracks, dry deserts, intermittent showers |
+| co2 | ppm | 400..440 | +2.4 ppm/yr trend, NH seasonal breathing (max May, min Sep), China/Europe/US/India sources, fire seasons |
+| aerosol_dust | AOD | 0..1.2 | Sahara + trans-Atlantic summer plume, Gobi spring storms, Arabia, Australia |
+| aerosol_smoke | AOD | 0..1.2 | Southern Africa (Aug), Sahel (Jan), Amazon (Sep), boreal summer fires, Mediterranean fires in `heatwave` |
+| lightning | flashes/km²/month | 0..10 | tropical land convection following the sun, Congo, Maracaibo, pre-monsoon India, US plains, very spiky |
+
+```bash
+python simulation/simulate_variables.py --scenario both --warming 0.5 --years 2 --frames 24 --preview
+```
+`--warming` also intensifies rain, boreal fires and lightning, so the climate story stays consistent across instruments.
+
 `output/` is generated: don't commit it (see `.gitignore`).

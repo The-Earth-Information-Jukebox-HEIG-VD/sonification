@@ -1,3 +1,7 @@
 numpy
 matplotlib
 pillow
+fastapi
+uvicorn
+# audio rendering: pip install --no-deps tinysoundfont   (ffmpeg needed for MP3)
+# tests: pip install httpx pytest
