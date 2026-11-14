@@ -32,7 +32,7 @@ Listen to `music/output/orchestra_switzerland_all.mp3`, or open the `.mid` in an
 uvicorn backend.app:app --reload --port 8000     # docs: http://localhost:8000/docs
 python backend/test_api.py                        # end-to-end tests
 ```
-Full contract: [`backend/API.md`](backend/API.md).
+**What the frontend uses: [`backend/FRONTEND_API.md`](backend/FRONTEND_API.md)**, two calls (`GET /api/instruments`, `POST /api/sonify`) with no options. The engine's own endpoints, for development: [`backend/API.md`](backend/API.md).
 
 ## Docker (what is deployed)
 ```bash
@@ -46,6 +46,7 @@ The image is self-contained for audio: `tinysoundfont`, `ffmpeg` and the General
 /app/data/precipitation_2000_2026/precipitation_<YYYY>_<MM>.npy          (one file per month, mm/h)
 /app/data/temperature_anomaly_1880_2025/temperature_anomaly_<YYYY>_<MM>.npy
 /app/data/lightning_2017_2023/lightning_<YYYY>_<MM>.npy                  (share of each pixel with lightning, 0-1)
+/app/data/co2_2002_2022/co2_<YYYY>_<MM>.npy                              (ppm)
 ```
 At start-up `backend/serve.py` runs `backend/prepare_data.py` in the background. It converts those folders with `simulation/build_monthly_dataset.py` into `/app/cache/_datasets`, which the API also scans:
 
@@ -54,13 +55,16 @@ At start-up `backend/serve.py` runs `backend/prepare_data.py` in the background.
 | `real_temperature_1880_2025` | temperature anomaly, every month since 1880, 2° |
 | `real_precipitation_2000_2026` | precipitation, June 2000 → November 2026, 1° |
 | `real_lightning_2017_2023` | lightning activity, March 2017 → July 2023, 1°, 55°S–55°N |
+| `real_co2_2002_2022` | CO₂, September 2002 → March 2022, 1°, outline pixels removed (see below) |
 
 One dataset per variable, one bar per month in all of them. **A request can mix them freely** (`JUKEBOX_MERGE_DATASETS=1`, set in the image): each variable is read from its own dataset and the composer lines them up by date, so a piece can start in 1950 with the piano alone, or in 1999 with the violins joining in June 2000. An instrument is silent for the months its data does not cover. The frontend decides what it asks for: the start date, the length (`duration_s`), and a faster time scale if it wants one (`"frames_per_bar": 12` in the request makes one bar a year).
 
 - The API answers at once; `GET /api/health` has `"preparing_data": true` until the conversion is over, and each dataset appears in `GET /api/datasets` when it is ready. The first start takes a few minutes; with `/app/cache` on a volume, later starts convert nothing unless the raw files changed.
 - The recipes are the `RECIPES` list at the top of `backend/prepare_data.py`. To try them without Docker: `python backend/prepare_data.py --raw ../datasets/data --out simulation/output`.
 - Ready-made `<prefix>_<variable>.npz` + `.json` files placed directly in `/app/data` are served as before.
-- `co2_2002_2022/` is not part of the deployed datasets yet: the data team is correcting those files. The converter can already read them (`--co2`), so adding CO₂ later is one entry in `INPUTS` and one in `RECIPES` in `backend/prepare_data.py`. Any other folder is ignored.
+- **CO₂ outline pixels.** The delivered CO₂ maps still carry the outline of the source picture (coasts, borders) as values near the top of the colour scale, 10–20 ppm above their neighbours, on about a fifth of the pixels. Left in, a small region full of borders reads far too high (Switzerland: about +15 ppm). The converter sets those pixels to "no data" (`drop_lines` in `SOURCES["co2"]`, `simulation/build_monthly_dataset.py`): a pixel more than 4.5 ppm above the lower quartile of its 10° neighbourhood, and its four neighbours. It is a stopgap: once the files have these pixels as NaN, it changes nothing. Each dataset's `.json` records how many pixels were dropped.
+- A folder the preparation step does not know is ignored.
+- The image serves only the frontend's two calls and `/api/health` (`JUKEBOX_FULL_API=0`). `-e JUKEBOX_FULL_API=1` also serves the engine's endpoints, e.g. to explore them at `/docs`.
 - `JUKEBOX_MERGE_DATASETS=0` goes back to one dataset per request (the default outside Docker).
 - `JUKEBOX_PREPARE=0` skips the conversion. `PORT` changes the port (default 8000).
 - The GitHub workflow publishes the image on a version tag: `git tag v0.1.0 && git push origin v0.1.0`.

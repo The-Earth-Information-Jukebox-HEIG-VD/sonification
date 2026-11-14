@@ -14,6 +14,8 @@ Config (environment variables):
   JUKEBOX_CACHE_DIR   where compositions are written / cached        default: backend/cache
   JUKEBOX_BUILT_DIR   datasets built by backend/prepare_data.py      default: <cache>/_datasets
   JUKEBOX_MERGE_DATASETS  1 = each variable from its own dataset, lined up by date   default: 0
+  JUKEBOX_FULL_API    0 = only the frontend's two calls (+ health) are served      default: 1
+  JUKEBOX_CHUNK_SECONDS   length of one piece returned by POST /api/sonify         default: 30
   JUKEBOX_CORS        comma-separated allowed origins                default: *
 """
 from __future__ import annotations
@@ -33,6 +35,7 @@ import numpy as np
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from starlette.routing import NoMatchFound
 from pydantic import AliasChoices, BaseModel, Field, ValidationError, field_validator, model_validator
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -45,12 +48,17 @@ CACHE_DIR = Path(os.environ.get("JUKEBOX_CACHE_DIR", ROOT / "backend" / "cache")
 # datasets converted from the team's raw folders by backend/prepare_data.py (the data folder can be read-only)
 BUILT_DIR = Path(os.environ.get("JUKEBOX_BUILT_DIR") or CACHE_DIR / "_datasets")
 CORS = [o.strip() for o in os.environ.get("JUKEBOX_CORS", "*").split(",")]
-API_VERSION = "1.9"
+API_VERSION = "2.0"
 COMPOSITION_ID = re.compile(r"[0-9a-f]{16}")         # what cache_key() produces
 # 1 = a request that names no dataset takes EACH variable from its own best dataset and the composer lines
 # them up by date (temperature since 1880 with precipitation joining in 2000 ...). The Docker image sets it:
 # there every dataset holds one variable. 0 (default) = one dataset per request, as before.
 MERGE_DATASETS = os.environ.get("JUKEBOX_MERGE_DATASETS", "0").lower() not in ("", "0", "false", "no")
+# 0 = only what the frontend uses is served: GET /api/instruments, POST /api/sonify (and /api/health).
+# The Docker image sets it. 1 (default) = also the engine's own endpoints, for development and tests.
+FULL_API = os.environ.get("JUKEBOX_FULL_API", "1").lower() not in ("", "0", "false", "no")
+CHUNK_SECONDS = float(os.environ.get("JUKEBOX_CHUNK_SECONDS", "30"))     # length of one piece of POST /api/sonify
+FRONTEND_PATHS = ("/api/health", "/api/instruments", "/api/sonify")
 
 app = FastAPI(title="Earth Information Jukebox: sonification API", version=API_VERSION,
               description="Turns NASA EIC intensity maps into an orchestra (MIDI + audio).")
@@ -281,7 +289,10 @@ def lock_for(key: str) -> threading.Lock:
 
 def file_url(request: Request, comp_id: str, path: Path) -> str:
     rel = path.relative_to(CACHE_DIR / comp_id).as_posix()
-    return str(request.url_for("get_file", comp_id=comp_id, file_path=rel))
+    try:
+        return str(request.url_for("get_file", comp_id=comp_id, file_path=rel))
+    except NoMatchFound:               # JUKEBOX_FULL_API=0: files are not served, the audio travels in the answer
+        return None
 
 
 def build_response(request: Request, comp_id: str, include_notes: bool, cached: bool, elapsed: float) -> dict:
@@ -319,7 +330,7 @@ def health():
     import sampler
     return {"status": "ok", "version": API_VERSION, "datasets": len(ds), "data_dir": str(DATA_DIR),
             "built_dir": str(BUILT_DIR), "preparing_data": (BUILT_DIR / ".preparing").exists(),
-            "merge_datasets": MERGE_DATASETS,
+            "merge_datasets": MERGE_DATASETS, "full_api": FULL_API,
             "audio_rendering": audio_ok, "mp3_encoding": bool(shutil.which("ffmpeg")),
             "orchestral_samples": sampler.vsco_available()}
 
@@ -416,64 +427,62 @@ ROLE_LABELS = {"timpani": "percussion"}
 
 
 @app.get("/api/instruments")
-def instruments(palette: str = "orchestra", zone: Optional[str] = None):
-    """Which instrument plays which dataset. `dataset_id` is what POST /api/sonify accepts."""
-    try:
-        pal = orchestra.resolve_palette(palette, zone)
-    except orchestra.ComposeError as e:
-        raise HTTPException(400, str(e))
+def instruments():
+    """The datasets the frontend can ask for and the instrument that plays each one."""
     ds = scan_datasets()
     rows = []
-    for var, cfg in orchestra.apply_palette(pal).items():
+    for var, cfg in orchestra.ORCHESTRA.items():
+        holders = [g for g in ds.values() if var in g["variables"]]
+        if not holders:
+            continue                                              # no data for this instrument on this server
         label, _, instrument = cfg["name"].partition(" - ")
-        short = SHORT_IDS.get(var, var)
-        best = pick_dataset([var])                               # the dataset a request for this variable gets
-        info = ds[best]["variables"][var] if best else {}
-        rows.append({
-            "dataset_id": short, "variable": var, "label": label, "instrument": instrument,
-            "role": ROLE_LABELS.get(cfg["role"], cfg["role"]),
-            "always_playing": bool(cfg.get("always_on")),       # false: plays only while the phenomenon is present
-            "units": info.get("units"), "available": best is not None,
-            "real_data": bool(info.get("real")),
-            # the whole period this variable can be asked for, over every dataset that has it
-            "time_start": min((g["time_start"] for g in ds.values() if var in g["variables"] and g["time_start"]),
-                              default=None),
-            "time_end": max((g["time_end"] for g in ds.values() if var in g["variables"] and g["time_end"]),
-                            default=None),
-            "found_in": sorted(k for k, g in ds.items() if var in g["variables"]),
-            "also_accepted": sorted({var, *[a for a, v in VARIABLE_ALIASES.items() if v == var]} - {short}),
-            "midi_program": cfg["program"], "pitch_range": [cfg["low"], cfg["high"]]})
-    return {"palette": pal, "instruments": rows, "by_dataset": {r["dataset_id"]: r["instrument"] for r in rows}}
+        best = ds[pick_dataset([var])]["variables"][var]
+        times = sorted(x for g in holders for x in g.get("times") or [])
+        n = 7 if all(len({x[:7] for x in g.get("times") or []}) == len(g.get("times") or []) for g in holders) else 10
+        rows.append({"dataset_id": SHORT_IDS.get(var, var), "name": label, "instrument": instrument,
+                     "units": ("degC anomaly" if best.get("anomaly") else best.get("units")),
+                     "first_time_period": times[0][:n] if times else None,
+                     "last_time_period": times[-1][:n] if times else None})
+    return {"instruments": rows}
 
 
 class SonifyPoint(BaseModel):
     lat: float = Field(ge=-90, le=90, validation_alias=AliasChoices("lat", "latitude"))
     lng: float = Field(ge=-180, le=360, validation_alias=AliasChoices("lng", "lon", "longitude"))
-    x: Optional[float] = Field(None, description="position on the frontend's array; not needed, lat/lng are used")
+    x: Optional[float] = Field(None, description="position on the frontend's array; accepted, not used")
     y: Optional[float] = None
 
 
 class SonifyRequest(BaseModel):
-    zone_id: Optional[str] = Field(None, description="the frontend's id of the area; echoed back. Without points it "
-                                                     "must be a preset zone of GET /api/options")
+    """What the frontend sends. Nothing else is needed."""
+    zone_id: Optional[str] = Field(None, description="the frontend's id of the area; echoed back")
     zone_name: Optional[str] = None
-    dataset_id: Optional[str | list[str]] = Field(None, description="which variable to hear: 'temperature', 'precipitation', "
-                                                  "'co2', 'dust', 'smoke', 'lightning' (or a list); 'all' or nothing = the whole orchestra")
+    dataset_id: Optional[str | list[str]] = Field(None, description="a dataset_id of GET /api/instruments, or a list of "
+                                                  "them to hear several instruments together")
     points: Optional[list[SonifyPoint]] = Field(None, description="the selected points: [{lat, lng, x, y}, ...]")
-    time_period: Optional[str | int] = Field(None, description="where to start: '2024-03', '2024' (default: the first date)")
-    aggregation: Literal["mean"] = Field("mean", description="how the points are combined; only the area-weighted mean exists")
-    duration_s: float = Field(30, gt=0, le=600, description="seconds of music per chunk")
+    time_period: Optional[str | int] = Field(None, description="where the music starts: '1880-01'")
+    aggregation: Literal["mean"] = Field("mean", description="how the points are combined: the area-weighted mean")
+
+
+class SonifyDebugRequest(SonifyRequest):
+    """Development only (POST /api/sonify/debug): the same request with the engine's knobs."""
+    duration_s: float = Field(CHUNK_SECONDS, gt=0, le=600)
     audio_format: Literal["mp3", "wav"] = "mp3"
-    embed_audio: bool = Field(True, description="false: no base64 in the answer, use audio_url instead")
-    options: Optional[dict] = Field(None, description="any other field of POST /api/compose (style, bpm, key, dataset, ...)")
+    embed_audio: bool = True
+    options: Optional[dict] = Field(None, description="any field of POST /api/compose (style, bpm, key, dataset, ...)")
 
 
-@app.post("/api/sonify")
-def sonify(req: SonifyRequest, request: Request):
-    opts = dict(req.options or {})
+SONIFY_FIELDS = ("zone_id", "dataset_id", "time_period", "next_time_period", "audio_data", "value", "point_count")
+
+
+def make_chunk(req: SonifyRequest, request: Request, duration_s: float = CHUNK_SECONDS, audio_format: str = "mp3",
+               embed_audio: bool = True, options: Optional[dict] = None) -> dict:
+    """One chunk of music for the selected points, starting at req.time_period. Returns everything known about
+    it; POST /api/sonify keeps SONIFY_FIELDS."""
+    opts = dict(options or {})
     ds = scan_datasets()
     if not ds:
-        raise HTTPException(404, "no dataset on the server; see GET /api/datasets")
+        raise HTTPException(404, "no dataset on the server")
     known = set().union(*(g["variables"] for g in ds.values()))
     # which instruments
     wanted = req.dataset_id if isinstance(req.dataset_id, list) else ([req.dataset_id] if req.dataset_id else [])
@@ -484,8 +493,8 @@ def sonify(req: SonifyRequest, request: Request):
             variables = []
             break
         if k not in known:
-            raise HTTPException(400, f"unknown dataset_id '{d}'; available: {sorted(known)} "
-                                     f"(also: {sorted(VARIABLE_ALIASES)}, all)")
+            ids = sorted(SHORT_IDS.get(v, v) for v in known)
+            raise HTTPException(400, f"unknown dataset_id '{d}'; available: {ids} (see GET /api/instruments)")
         variables.append(k)
     # which area
     if req.points:
@@ -496,9 +505,9 @@ def sonify(req: SonifyRequest, request: Request):
     elif (req.zone_id or "").lower() in ZONES:
         area = {"zone": req.zone_id.lower()}
     else:
-        raise HTTPException(422, "send points, or a zone_id that is a preset zone (GET /api/options)")
-    body = {**opts, **area, "variables": variables or None, "duration_s": req.duration_s, "audio": True,
-            "audio_format": req.audio_format, "include_notes": False}
+        raise HTTPException(422, "points is empty: send the selected points [{lat, lng}, ...]")
+    body = {**opts, **area, "variables": variables or None, "duration_s": duration_s, "audio": True,
+            "audio_format": audio_format, "include_notes": False}
     if req.time_period is not None:
         body["start"] = str(req.time_period)
     try:
@@ -518,7 +527,8 @@ def sonify(req: SonifyRequest, request: Request):
     if audio is None:
         raise HTTPException(503, "audio rendering is not available on the server (see GET /api/health)")
     # the period right after this chunk, in the same form as time_period ('2024-03', or a day for daily data)
-    times = sorted({x for k in set(used.values()) for x in ds[k].get("times") or []}) if used         else (group.get("times") or [])
+    times = sorted({x for k in set(used.values()) for x in ds[k].get("times") or []}) if used \
+        else (group.get("times") or [])
     n = 7 if len({t[:7] for t in times}) == len(times) else 10
     end_time = score.get("time_last_frame") or score["time_end"]       # the last frame played, not the start of the last bar
     last = times.index(end_time) if end_time in times else None
@@ -532,7 +542,7 @@ def sonify(req: SonifyRequest, request: Request):
     return {"zone_id": req.zone_id, "zone_name": req.zone_name, "dataset_id": req.dataset_id,
             "time_period": score["time_start"][:n] if score["time_start"] else None,
             "next_time_period": nxt,
-            "audio_data": base64.b64encode(audio.read_bytes()).decode("ascii") if req.embed_audio else None,
+            "audio_data": base64.b64encode(audio.read_bytes()).decode("ascii") if embed_audio else None,
             "audio_format": audio.suffix[1:], "audio_url": out["files"]["audio"],
             "value": first[main][0] if main else None, "units": first[main][1] if main else None,
             "values": {v: x[0] for v, x in first.items()},
@@ -545,6 +555,20 @@ def sonify(req: SonifyRequest, request: Request):
             "source_datasets": {v: k for v, k in used.items() if v in first} or None,
             "real_data": bool(info.get("real")),
             "anomaly": bool(info.get("anomaly"))}                 # value = degC vs normal
+
+
+@app.post("/api/sonify")
+def sonify(req: SonifyRequest, request: Request):
+    """The frontend's call: selected points + one time period in; CHUNK_SECONDS of MP3 (base64) out, with the
+    time period to ask for next."""
+    chunk = make_chunk(req, request)
+    return {k: chunk[k] for k in SONIFY_FIELDS}
+
+
+@app.post("/api/sonify/debug")
+def sonify_debug(req: SonifyDebugRequest, request: Request):
+    """Development only: the same chunk with every detail (datasets used, values of each instrument, ...)."""
+    return make_chunk(req, request, req.duration_s, req.audio_format, req.embed_audio, req.options)
 
 
 @app.get("/api/compositions/{comp_id}")
@@ -565,3 +589,8 @@ def get_file(comp_id: str, file_path: str):
     media = {".mid": "audio/midi", ".mp3": "audio/mpeg", ".wav": "audio/wav",
              ".json": "application/json", ".png": "image/png"}.get(target.suffix, "application/octet-stream")
     return FileResponse(target, media_type=media, filename=target.name)
+
+
+if not FULL_API:        # serve only what the frontend uses; everything else stays available as Python functions
+    app.router.routes = [r for r in app.router.routes
+                         if not getattr(r, "path", "").startswith("/api/") or r.path in FRONTEND_PATHS]

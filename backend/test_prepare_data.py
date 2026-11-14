@@ -13,7 +13,8 @@ import numpy as np
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "simulation"))
 sys.path.insert(0, str(ROOT / "music"))
-from test_build_monthly_dataset import fake_lightning, fake_precip_monthly, fake_temperature, fake_year  # noqa: E402
+from test_build_monthly_dataset import (fake_co2, fake_lightning, fake_precip_monthly, fake_temperature,  # noqa: E402
+                                         fake_year)
 
 
 def prepare(raw, out, *extra):
@@ -87,8 +88,10 @@ def test_lightning_and_unknown_folders_and_removed_recipes(tmp_path):
     raw, out = raw_like_the_datasets_repo(tmp_path), tmp_path / "built"
     (raw / "lightning_2001_2001").mkdir()
     fake_lightning(raw / "lightning_2001_2001", ["2001-02", "2001-03", "2001-04"])
-    (raw / "co2_2002_2022").mkdir()                              # a folder the data step does not use (yet)
-    (raw / "co2_2002_2022" / "co2_2002_09.npy").write_bytes(b"not read")
+    (raw / "co2_2001_2001").mkdir()
+    fake_co2(raw / "co2_2001_2001", ["2001-01", "2001-02"])
+    (raw / "snow_days_2000_2026").mkdir()                        # a folder the data step does not know
+    (raw / "snow_days_2000_2026" / "snow_days_2001_01.npy").write_bytes(b"not read")
     # a dataset left in the cache by an older version of the recipes (e.g. a combined one) is cleaned up
     out.mkdir()
     (out / "real_monthly_2000_2001_precipitation.npz").write_bytes(b"old")
@@ -96,10 +99,12 @@ def test_lightning_and_unknown_folders_and_removed_recipes(tmp_path):
     (out / "prepared.json").write_text(json.dumps({"precipitation + temperature": {
         "signature": "x", "files": ["real_monthly_2000_2001_precipitation.npz", "real_monthly_2000_2001_precipitation.json"]}}))
     log = prepare(raw, out)
-    assert "3 dataset(s) built" in log and "removed the datasets of 'precipitation + temperature'" in log
+    assert "4 dataset(s) built" in log and "removed the datasets of 'precipitation + temperature'" in log
     names = sorted(p.name for p in out.glob("*.npz"))
-    assert names == ["real_lightning_2001_2001_lightning.npz", "real_precipitation_2000_2001_precipitation.npz",
-                     "real_temperature_2000_2001_surface_temperature.npz"]
+    assert names == ["real_co2_2001_2001_co2.npz", "real_lightning_2001_2001_lightning.npz",
+                     "real_precipitation_2000_2001_precipitation.npz", "real_temperature_2000_2001_surface_temperature.npz"]
+    co2 = json.loads((out / "real_co2_2001_2001_co2.json").read_text())
+    assert co2["dropped_outline_pixels"]["share_mean_min_max"][0] > 0.05      # the outline pixels were removed
     assert not (out / "real_monthly_2000_2001_precipitation.json").exists()
     shape = lambda n: json.loads((out / n).with_suffix(".json").read_text())["shape"][0]   # noqa: E731
     assert shape("real_lightning_2001_2001_lightning.npz") == 3 and shape("real_precipitation_2000_2001_precipitation.npz") == 5
@@ -153,14 +158,17 @@ import json
 from fastapi.testclient import TestClient
 from backend.app import app
 c = TestClient(app)
+DEBUG = "/api/sonify/debug"
 pts = [{"lat": 46.5, "lng": 6.6}]
 def sonify(**kw):
-    r = c.post("/api/sonify", json={"zone_id": "x", "points": pts, "embed_audio": False, "duration_s": 6, **kw})
-    return {"status": r.status_code, **r.json()}
+    r = c.post(DEBUG, json={"zone_id": "x", "points": pts, "embed_audio": False, "duration_s": 6, **kw})
+    return {"status": r.status_code, **(r.json() if r.status_code != 404 else {})}
 inst = {r["dataset_id"]: r for r in c.get("/api/instruments").json()["instruments"]}
+public = c.post("/api/sonify", json={"zone_id": "x", "zone_name": "X", "dataset_id": "precipitation", "points": pts,
+                                     "time_period": "2001-01", "aggregation": "mean"})
 print(json.dumps({
     "health": c.get("/api/health").json(),
-    "ids": sorted(x["id"] for x in c.get("/api/datasets").json()["datasets"]),
+    "ids": sorted(x["id"] for x in c.get("/api/datasets").json().get("datasets", [])),
     "precip": sonify(dataset_id="precipitation", time_period="2001-01"),
     "temp": sonify(dataset_id="temperature", time_period="2001-04"),
     "nodate": sonify(dataset_id="temperature"),
@@ -172,7 +180,11 @@ print(json.dumps({
                      options={"dataset": "real_precipitation_2000_2001"}),
     "missing": sonify(dataset_id=["temperature", "co2"], time_period="2001-01"),
     "blocked": c.get("/api/files/_datasets/real_precipitation_2000_2001_precipitation.npz").status_code,
-    "ranges": {k: [v["time_start"][:7], v["time_end"][:7]] for k, v in inst.items() if v["available"]},
+    "ranges": {k: [v["first_time_period"], v["last_time_period"]] for k, v in inst.items()},
+    "public": {"status": public.status_code, "keys": list(public.json()), "next": public.json().get("next_time_period"),
+               "audio": len(public.json().get("audio_data") or "")},
+    "paths": sorted(p for p in c.get("/openapi.json").json()["paths"] if p.startswith("/api/")),
+    "compose_status": c.post("/api/compose", json={}).status_code,
 }))
 """
 
@@ -231,3 +243,18 @@ def test_without_merge_mode_one_dataset_per_request(tmp_path):
     assert res["precip"]["status"] == 200 and res["precip"]["source_datasets"] is None
     assert res["both_early"]["status"] == 400 and "no single dataset" in res["both_early"]["detail"]
     assert len(res["orchestra"]["values"]) == 1                    # the default dataset only
+
+
+def test_deployed_api_is_only_what_the_frontend_uses(tmp_path):
+    """JUKEBOX_FULL_API=0 (the Docker image): GET /api/instruments, POST /api/sonify and /api/health, nothing else."""
+    raw, cache = raw_like_the_datasets_repo(tmp_path), tmp_path / "cache"
+    prepare(raw, cache / "_datasets")
+    res = run_api(raw, cache, JUKEBOX_MERGE_DATASETS="1", JUKEBOX_FULL_API="0")
+    assert res["paths"] == ["/api/health", "/api/instruments", "/api/sonify"] and res["health"]["full_api"] is False
+    assert res["compose_status"] == 404 and res["precip"]["status"] == 404          # no engine or debug endpoints
+    # the frontend's call works and answers with exactly its seven fields; 30 s from 2001-01 = the 3 months left
+    assert res["public"]["status"] == 200 and res["public"]["audio"] > 10000 and res["public"]["next"] is None
+    assert res["public"]["keys"] == ["zone_id", "dataset_id", "time_period", "next_time_period", "audio_data", "value",
+                                     "point_count"]
+    assert res["ranges"] == {"temperature": ["2000-12", "2001-04"], "precipitation": ["2000-11", "2001-03"]}
+

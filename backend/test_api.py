@@ -166,58 +166,72 @@ def test_single_date_and_duration():
     assert s["time_start"].startswith("2024-01") and s["n_bars"] == 10
 
 
-def test_instruments_table():
+def test_instruments_list():
+    """GET /api/instruments: the datasets the frontend can ask for, and the instrument that plays each."""
     j = client.get("/api/instruments").json()
-    assert j["palette"] == "orchestra" and len(j["instruments"]) == len(j["by_dataset"]) >= 6
-    assert {"temperature", "co2", "precipitation", "dust", "smoke", "lightning"} <= set(j["by_dataset"])
-    t = next(r for r in j["instruments"] if r["dataset_id"] == "temperature")
-    assert t["variable"] == "surface_temperature" and t["label"] == "Temperature" and t["instrument"] == j["by_dataset"]["temperature"]
-    assert t["always_playing"] and t["available"] and t["units"] == "degC" and "temp" in t["also_accepted"]
-    # every dataset_id of the table is accepted by /api/sonify
+    assert list(j) == ["instruments"] and len(j["instruments"]) >= 6
     for r in j["instruments"]:
-        if not r["available"]:                                   # e.g. snowfall is only in the daily dataset
-            continue
-        ok = client.post("/api/sonify", json={"zone_id": "europe", "dataset_id": r["dataset_id"], "embed_audio": False,
-                                              "duration_s": 6})
-        assert ok.status_code == 200 and list(ok.json()["values"]) == [r["variable"]], ok.text
-    # regional instruments
-    jp = client.get("/api/instruments?palette=auto&zone=japan").json()
-    assert jp["palette"] == "japan" and jp["by_dataset"] != j["by_dataset"]
-    assert client.get("/api/instruments?palette=nope").status_code == 400
+        assert list(r) == ["dataset_id", "name", "instrument", "units", "first_time_period", "last_time_period"]
+        assert r["first_time_period"] <= r["last_time_period"] and len(r["first_time_period"]) in (7, 10)
+    ids = [r["dataset_id"] for r in j["instruments"]]
+    assert {"temperature", "co2", "precipitation", "dust", "smoke", "lightning"} <= set(ids) and len(set(ids)) == len(ids)
+    t = next(r for r in j["instruments"] if r["dataset_id"] == "temperature")
+    assert t["name"] == "Temperature" and "Piano" in t["instrument"] and t["units"].startswith("degC")
+    # every dataset_id of the list is accepted by /api/sonify
+    for r in j["instruments"]:
+        ok = client.post("/api/sonify/debug", json={"zone_id": "europe", "dataset_id": r["dataset_id"],
+                                                    "embed_audio": False, "duration_s": 6})
+        assert ok.status_code == 200 and len(ok.json()["values"]) == 1, ok.text
 
 
 def test_sonify_frontend_contract():
-    """The frontend's own request/response shape: points + one time period -> audio inside the JSON."""
+    """POST /api/sonify: exactly the frontend's request and response, nothing more."""
     import base64
     body = {"zone_id": "france", "zone_name": "France", "dataset_id": "temperature",
             "points": [{"lat": 48.8566, "lng": 2.3522, "x": 512, "y": 234},
                        {"lat": 48.1173, "lng": -1.6778, "x": 508, "y": 236},
                        {"lat": 43.2965, "lng": 5.3698, "x": 520, "y": 248}],
-            "time_period": "2024-03", "aggregation": "mean"}
+            "time_period": "2024-03", "aggregation": "mean", **({} if not FULL else {})}
     r = client.post("/api/sonify", json=body)
     assert r.status_code == 200, r.text
     j = r.json()
+    assert list(j) == ["zone_id", "dataset_id", "time_period", "next_time_period", "audio_data", "value", "point_count"]
     assert j["zone_id"] == "france" and j["dataset_id"] == "temperature" and j["point_count"] == 3
-    assert j["time_period"] == "2024-03" and j["next_time_period"] == "2025-01"      # 30 s = 10 monthly bars
-    assert isinstance(j["value"], float) and j["units"] == "degC" and list(j["values"]) == ["surface_temperature"]
-    assert abs(j["duration_s"] - 30) < 0.05 and j["cell_count"] >= 1
+    assert j["time_period"] == "2024-03" and isinstance(j["value"], float)
     audio = base64.b64decode(j["audio_data"])
-    assert len(audio) > 10000 and (audio[:4] == b"RIFF" if j["audio_format"] == "wav" else audio[:3] in (b"ID3", b"\xff\xfb\x90")
-                                   or audio[0] == 0xFF)
-    assert client.get(j["audio_url"]).content == audio
-    # the frontend plays the chunk, then asks for the next one
-    j2 = client.post("/api/sonify", json={**body, "time_period": j["next_time_period"], "embed_audio": False}).json()
-    assert j2["time_period"] == "2025-01" and j2["audio_data"] is None and j2["audio_url"]
-    # no dataset_id = the whole orchestra; lon is accepted for lng; a preset zone needs no points
-    j3 = client.post("/api/sonify", json={"zone_id": "india", "time_period": "2024-03", "embed_audio": False,
-                                          "options": {"bpm": 96, **({"dataset": FULL} if FULL else {})}}).json()
-    assert len(j3["values"]) > 1 and j3["point_count"] == 0 and j3["cell_count"] is None
+    assert len(audio) > 10000 and (audio[:3] == b"ID3" or audio[0] == 0xFF or audio[:4] == b"RIFF")
+    # the frontend plays the chunk, then asks for the next one with next_time_period
+    assert j["next_time_period"] > j["time_period"]
+    j2 = client.post("/api/sonify", json={**body, "time_period": j["next_time_period"]}).json()
+    assert j2["time_period"] == j["next_time_period"]
+    # the request has no options: unknown fields are ignored, they change nothing
+    j3 = client.post("/api/sonify", json={**body, "duration_s": 5, "embed_audio": False, "options": {"bpm": 200}}).json()
+    assert j3["audio_data"] == j["audio_data"] and j3["next_time_period"] == j["next_time_period"]
     pts = [{"lat": 46.5, "lon": 6.6}]
-    assert client.post("/api/sonify", json={"points": pts, "dataset_id": ["co2", "rain"], "embed_audio": False}).status_code == 200
     assert client.post("/api/sonify", json={"points": pts, "aggregation": "max"}).status_code == 422
-    assert client.post("/api/sonify", json={"zone_id": "atlantis"}).status_code == 422
+    assert client.post("/api/sonify", json={"zone_id": "atlantis"}).status_code == 422       # no points
     assert client.post("/api/sonify", json={"points": pts, "dataset_id": "unicorns"}).status_code == 400
     assert client.post("/api/sonify", json={"points": [{"lat": 99, "lng": 0}]}).status_code == 422
+
+
+def test_sonify_debug_details():
+    """POST /api/sonify/debug (development only): the same chunk with the engine's knobs and every detail."""
+    body = {"zone_id": "france", "dataset_id": "temperature", "time_period": "2024-03",
+            "points": [{"lat": 48.8566, "lng": 2.3522}, {"lat": 43.2965, "lng": 5.3698}],
+            "options": {"dataset": "sim_both_24f_1deg"}}
+    j = client.post("/api/sonify/debug", json=body).json()
+    assert j["time_period"] == "2024-03" and j["next_time_period"] == "2025-01"      # 30 s = 10 monthly bars
+    assert j["units"] == "degC" and list(j["values"]) == ["surface_temperature"] and j["cell_count"] >= 1
+    assert abs(j["duration_s"] - 30) < 0.05 and client.get(j["audio_url"]).status_code == 200
+    j2 = client.post("/api/sonify/debug", json={**body, "time_period": j["next_time_period"], "embed_audio": False}).json()
+    assert j2["time_period"] == "2025-01" and j2["audio_data"] is None and j2["audio_url"]
+    # no dataset_id = the whole orchestra; a preset zone needs no points
+    j3 = client.post("/api/sonify/debug", json={"zone_id": "india", "time_period": "2024-03", "embed_audio": False,
+                                                "options": {"bpm": 96, **({"dataset": FULL} if FULL else {})}}).json()
+    assert len(j3["values"]) > 1 and j3["point_count"] == 0 and j3["cell_count"] is None
+    pts = [{"lat": 46.5, "lon": 6.6}]
+    assert client.post("/api/sonify/debug", json={"points": pts, "dataset_id": ["co2", "rain"], "embed_audio": False,
+                                                  "options": {"dataset": "sim_both_24f_1deg"}}).status_code == 200
 
 
 def test_real_dataset_tension_and_form():
@@ -278,8 +292,8 @@ def test_real_monthly_precipitation():
     assert d["real_variables"] == ["precipitation"] and d["frames"] >= 300 and d["time_start"].startswith("2000-06")
     # a request for precipitation at a date only this dataset covers finds it by itself
     pts = [{"lat": 46.5, "lng": 6.6}, {"lat": 47.4, "lng": 8.5}]
-    j = client.post("/api/sonify", json={"zone_id": "ch", "dataset_id": "precipitation", "points": pts,
-                                         "time_period": "2003-05", "embed_audio": False}).json()
+    j = client.post("/api/sonify/debug", json={"zone_id": "ch", "dataset_id": "precipitation", "points": pts,
+                                               "time_period": "2003-05", "embed_audio": False}).json()
     assert j["source_dataset"] == REAL_MONTHLY and j["real_data"] and j["units"] == "mm/day"
     assert j["time_period"] == "2003-05" and j["next_time_period"] == "2004-03" and abs(j["duration_s"] - 30) < 0.05
     # the monsoon: India is far wetter in July than in January
@@ -289,8 +303,8 @@ def test_real_monthly_precipitation():
     assert s["n_bars"] == 12 and v[6 * 4] > 5 * v[0] > 0
     # a variable this dataset does not have is served by another one
     if FULL:
-        t = client.post("/api/sonify", json={"zone_id": "europe", "dataset_id": "temperature", "embed_audio": False,
-                                             "duration_s": 6}).json()
+        t = client.post("/api/sonify/debug", json={"zone_id": "europe", "dataset_id": "temperature",
+                                                   "embed_audio": False, "duration_s": 6}).json()
         assert t["source_dataset"] != REAL_MONTHLY and t["units"] == "degC"
 
 
@@ -310,8 +324,8 @@ def test_temperature_anomaly_history():
     assert roots[1] > roots[0]
     assert set(s["instruments"]) == {"surface_temperature"}                # the piano alone: no extra marker track
     # a request for temperature in 1950 is served by this dataset (the others start much later)
-    j = client.post("/api/sonify", json={"zone_id": "switzerland", "dataset_id": "temperature", "time_period": "1950",
-                                         "embed_audio": False, "duration_s": 8}).json()
+    j = client.post("/api/sonify/debug", json={"zone_id": "switzerland", "dataset_id": "temperature",
+                                               "time_period": "1950", "embed_audio": False, "duration_s": 8}).json()
     assert j["source_dataset"] == TEMP_HISTORY and j["anomaly"] is True and j["time_period"].startswith("1950")
 
 

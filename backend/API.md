@@ -1,4 +1,6 @@
-# Sonification API: contract for the frontend
+# Sonification API: the engine, for development
+
+> **Frontend developers: read [`FRONTEND_API.md`](FRONTEND_API.md).** It has the two calls you need. This file documents the engine's own endpoints, which the deployed backend does not serve (`JUKEBOX_FULL_API=0` in the Docker image).
 
 Backend for the Earth Information Jukebox. The frontend sends **what to listen to** (dataset, zone or selected cells, time window, a few musical options). The backend composes the orchestra and returns **the score as JSON plus URLs** to the MIDI, the per-instrument stems and the rendered audio.
 
@@ -19,6 +21,8 @@ uvicorn backend.app:app --reload --port 8000
 |---|---|---|
 | `JUKEBOX_DATA_DIR` | `simulation/output` | folder with the intensity maps (`<dataset>_<variable>.npz` + `.json`, see `simulation/INTENSITY_MAP_SPEC.md`). When the real extraction is ready, point this at its output folder: nothing else changes. |
 | `JUKEBOX_CACHE_DIR` | `backend/cache` | generated compositions (safe to delete) |
+| `JUKEBOX_FULL_API` | `1` | `0`: only `/api/instruments`, `/api/sonify` and `/api/health` are served (set in the Docker image) |
+| `JUKEBOX_CHUNK_SECONDS` | `30` | length of one piece returned by `/api/sonify` |
 | `JUKEBOX_MERGE_DATASETS` | `0` | `1`: a request that names no dataset takes each variable from its own best dataset, lined up by date (set in the Docker image) |
 | `JUKEBOX_BUILT_DIR` | `<cache>/_datasets` | datasets converted from the team's raw folders by `backend/prepare_data.py`; scanned in addition to `JUKEBOX_DATA_DIR`. In the Docker image this happens by itself at start-up (see the README) |
 | `JUKEBOX_CORS` | `*` | allowed origins, comma-separated |
@@ -28,82 +32,18 @@ uvicorn backend.app:app --reload --port 8000
 |---|---|---|
 | GET | `/api/health` | status, number of datasets, whether audio/MP3 rendering is available, and `preparing_data` (true while the server is still converting raw data at start-up: datasets can still be missing) |
 | GET | `/api/options` | everything the UI needs for its menus: zones (with bbox), palettes, keys, scales, the orchestra (which instrument plays which variable), default request |
-| GET | `/api/instruments` | **which instrument plays which dataset**: one row per dataset with `dataset_id` (what `/api/sonify` accepts), `label`, `instrument`, `role`, `units`, `always_playing`, plus `by_dataset`, a plain `{dataset_id: instrument}` map. `?palette=auto&zone=japan` gives the regional instruments |
+| GET | `/api/instruments` | **frontend call**: the datasets and the instrument that plays each (`FRONTEND_API.md`) |
 | GET | `/api/datasets` | available datasets: id, variables (units, range, instrument), number of frames, time range |
-| **POST** | **`/api/sonify`** | **the frontend's own format**: selected points + one time period in, 30 s of audio inside the JSON out (see the next section) |
+| **POST** | **`/api/sonify`** | **frontend call**: selected points + one time period in, 30 s of MP3 inside the JSON out (`FRONTEND_API.md`) |
+| POST | `/api/sonify/debug` | development only: the same with the engine's knobs and a detailed answer |
 | **POST** | **`/api/compose`** | **compose a piece**, with every option and the full score (see below) |
 | GET | `/api/compositions/{id}` | fetch an earlier composition again (`?include_notes=false` for a light payload) |
 | GET | `/api/files/{id}/{file}` | download a generated file (MIDI, MP3/WAV, JSON, PNG); the compose response gives you the full URLs |
 
-## GET `/api/instruments` (dataset ↔ instrument)
-```json
-{
-  "palette": "orchestra",
-  "by_dataset": {
-    "temperature": "Piano (chords)", "co2": "Contrabass", "precipitation": "Violins (melody)",
-    "dust": "Flute (melody)", "smoke": "French Horns (melody)", "lightning": "Xylophone"
-  },
-  "instruments": [
-    {"dataset_id": "temperature", "variable": "surface_temperature", "label": "Temperature",
-     "instrument": "Piano (chords)", "role": "harmony", "always_playing": true,
-     "units": "degC", "available": true, "real_data": false,
-     "time_start": "2024-01-15T00:00:00Z", "time_end": "2025-12-15T01:30:00Z", "found_in": ["sim_both_24f_1deg"],
-     "also_accepted": ["surface_temperature", "temp"], "midi_program": 0, "pitch_range": [48, 72]}
-  ]
-}
-```
-`always_playing: false` means the instrument is heard only while its phenomenon is present in the area (rain, dust, smoke, lightning). `available` says whether any dataset on the server has that variable; `units`, `real_data` (observed rather than modelled), `time_start` and `time_end` describe the dataset a request for it would get, and `found_in` lists every dataset that has it. The table is read from the orchestration in `music/orchestra.py`, so it follows any change made there.
+## The frontend's two calls
+`GET /api/instruments` and `POST /api/sonify` are described in **[`FRONTEND_API.md`](FRONTEND_API.md)**, one page, no options. They are all the deployed backend serves.
 
-## POST `/api/sonify` (points + one date → a chunk of audio)
-The frontend sends the selected points and one time period. The backend answers with 30 seconds of music starting at that period, and with the period to ask for next.
-```json
-{
-  "zone_id": "france",
-  "zone_name": "France",
-  "dataset_id": "temperature",
-  "points": [
-    {"lat": 48.8566, "lng": 2.3522, "x": 512, "y": 234},
-    {"lat": 48.1173, "lng": -1.6778, "x": 508, "y": 236}
-  ],
-  "time_period": "2024-03",
-  "aggregation": "mean"
-}
-```
-| field | notes |
-|---|---|
-| `points` | the selected points. **`lat` and `lng` are what the backend uses** (`lon` also works); `x`, `y` are accepted and ignored, so the frontend's array can have any resolution. Every data cell that contains at least one point is averaged |
-| `zone_id`, `zone_name` | the frontend's own labels, echoed back. Without `points`, `zone_id` must be a preset zone of `/api/options` |
-| `dataset_id` | which variable to hear: `temperature`, `precipitation` (`rain`), `co2`, `dust`, `smoke`, `lightning`, or the names of `/api/datasets`. A list plays several together. `all`, or leaving it out, plays the whole orchestra |
-| `time_period` | where to start: `"2024-03"`, `"2024-3"` or `"2024"`. Left out = the first date of the data |
-| `aggregation` | only `"mean"` (area-weighted); anything else is a `422` |
-| `duration_s` | optional, default `30` |
-| `audio_format` | optional, `mp3` (default) or `wav` |
-| `embed_audio` | optional; `false` leaves `audio_data` empty, for use with `audio_url` (smaller answer) |
-| `options` | optional object with any field of `/api/compose` below, e.g. `{"style": "musical", "bpm": 96}` |
-
-```json
-{
-  "zone_id": "france", "zone_name": "France", "dataset_id": "temperature",
-  "time_period": "2024-03",
-  "next_time_period": "2025-01",
-  "audio_data": "<base64 of the MP3 or WAV file>",
-  "audio_format": "mp3",
-  "audio_url": "http://localhost:8000/api/files/3f0c…/score.mp3",
-  "value": 9.42, "units": "degC",
-  "values": {"surface_temperature": 9.42},
-  "point_count": 2, "cell_count": 2,
-  "aggregation": "mean",
-  "time_end": "2024-12", "duration_s": 30.0,
-  "composition_id": "3f0c…", "cached": false,
-  "source_dataset": "real_daily_2024", "real_data": true
-}
-```
-- **`time_period`** is the date the music really starts at. It differs from the request when the requested date is before the data begins.
-- **`next_time_period`** is the period right after this chunk: send it as the next `time_period` to continue. It is `null` at the end of the data.
-- **`audio_data`** in the browser: `new Audio("data:audio/mpeg;base64," + audio_data)` (`audio/wav` for WAV), or simply `new Audio(audio_url)`.
-- **`value`** is the mean of the first variable over the selected cells at `time_period`, in `units`; `values` has it for every variable played.
-- **`point_count`** is the number of points received; `cell_count` is the number of data cells they cover.
-- For the notes, bars and per-beat values of the same piece: `GET /api/compositions/{composition_id}`.
+For development, `POST /api/sonify/debug` takes the same request plus the engine's knobs (`duration_s`, `audio_format`, `embed_audio`, and `options` = any field of `/api/compose` below) and answers with every detail: `values` and `units` of each instrument, `time_end`, `duration_s`, `audio_url`, `composition_id`, `source_dataset(s)`, `real_data`, `anomaly`, `cell_count`.
 
 ## POST `/api/compose`
 All fields are optional. The smallest request is `{}` (global zone, default dataset).
@@ -328,9 +268,15 @@ All fields are optional. The smallest request is `{}` (global zone, default data
 
 ```
 
+### New in v2.0 (the frontend API is two calls)
+- `POST /api/sonify` takes exactly the frontend's request (`zone_id`, `zone_name`, `dataset_id`, `points`, `time_period`, `aggregation`) and answers with exactly `zone_id`, `dataset_id`, `time_period`, `next_time_period`, `audio_data`, `value`, `point_count`. Its former options moved to `POST /api/sonify/debug`.
+- `GET /api/instruments` is a plain list: `dataset_id`, `name`, `instrument`, `units`, `first_time_period`, `last_time_period`, for the datasets the server has. No parameters.
+- `JUKEBOX_FULL_API=0` (the Docker image): nothing else is served. Outside Docker the engine endpoints below stay available.
+
 ### New in v1.9 (lightning, and what the Docker image serves)
 - new variable from the team's data: **lightning** (`dataset_id: "lightning"`, xylophone). Its value is the share of the selected area with lightning in the month, from 0 to 1, not a number of flashes. It exists from March 2017 to July 2023 and only between 55°S and 55°N; an area entirely outside that band has no data (`400`).
-- the Docker image serves one dataset per variable (`real_temperature_*`, `real_precipitation_*`, `real_lightning_*`), all at one bar per month, and **merges them per request**: each requested variable is read from its own dataset and they are lined up by date. Any combination can be asked for any start date. An instrument is silent for the months its data does not cover (its entry in `values` is `null` there), and a variable with no data at all in the period is left out of the piece.
+- **CO₂** (`dataset_id: "co2"`, contrabass) from the team's files, September 2002 to March 2022. The converter removes the outline of the source picture that is still in those files (about a fifth of the pixels); a very small area can therefore have little or no CO₂ data in some months.
+- the Docker image serves one dataset per variable (`real_temperature_*`, `real_precipitation_*`, `real_lightning_*`, `real_co2_*`), all at one bar per month, and **merges them per request**: each requested variable is read from its own dataset and they are lined up by date. Any combination can be asked for any start date. An instrument is silent for the months its data does not cover (its entry in `values` is `null` there), and a variable with no data at all in the period is left out of the piece.
 - `/api/sonify` answers with `source_datasets` (`{variable: dataset}`) when several datasets were merged; `source_dataset` is then the main variable's. `value` and `units` are those of the first requested variable that is in the piece.
 - with no `dataset_id`, the piece has every variable the server has data for in that period.
 - the merge is switched on with `JUKEBOX_MERGE_DATASETS=1` (the image sets it; `GET /api/health` reports `merge_datasets`). Without it, or when a `dataset` is named, a request is served from one dataset as before. In `/api/compose`, `request.datasets` gives the `{variable: dataset}` that was used.

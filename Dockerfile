@@ -3,7 +3,7 @@
 # Build:  docker build -t earth-jukebox-sonification .
 #         docker build -t earth-jukebox-sonification --build-arg WITH_VSCO=1 .   # + real orchestral samples (~440 MB)
 # Run:    docker run -p 8000:8000 -v /path/to/datasets/data:/app/data:ro -v jukebox-cache:/app/cache earth-jukebox-sonification
-#         then  http://localhost:8000/docs   and   http://localhost:8000/api/health
+#         then  http://localhost:8000/api/health  and  http://localhost:8000/docs  (the frontend's two calls: backend/FRONTEND_API.md)
 #
 # How the pieces fit (see the `deployment` repository):
 #   * the `datasets` image fills a volume with the team's RAW data (precipitation_2000_2026/, temperature_anomaly_1880_2025/),
@@ -83,10 +83,13 @@ COPY --from=sounds /app/soundfonts/ soundfonts/
 #   JUKEBOX_CACHE_DIR : compositions + the converted datasets (must be writable; a volume keeps them between restarts)
 #   JUKEBOX_PREPARE   : 0 = do not convert raw data at start-up
 #   JUKEBOX_MERGE_DATASETS : 1 = each variable is read from its own dataset and they are lined up by date
+#   JUKEBOX_FULL_API  : 0 = serve only the frontend's calls (GET /api/instruments, POST /api/sonify) and /api/health;
+#                       1 = also the engine's own endpoints and http://localhost:8000/docs for them
 ENV JUKEBOX_DATA_DIR=/app/data \
     JUKEBOX_CACHE_DIR=/app/cache \
     JUKEBOX_CORS=* \
     JUKEBOX_PREPARE=1     JUKEBOX_MERGE_DATASETS=1 \
+    JUKEBOX_FULL_API=0 \
     PORT=8000 \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
