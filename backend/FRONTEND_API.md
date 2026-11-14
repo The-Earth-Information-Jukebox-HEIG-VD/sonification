@@ -11,8 +11,8 @@ Two calls. No options.
 {
   "palette": "orchestra",
   "by_dataset": {"temperature": "Piano (chords)", "co2": "Contrabass", "precipitation": "Violins (melody)",
-                 "snow": "Glockenspiel (melody)", "fires": "Trombones (melody)", "lightning": "Xylophone",
-                 "night_lights": "Harp (melody)"},
+                 "snow": "Glockenspiel (melody)", "fires": "Trombones", "lightning": "Timpani",
+                 "night_lights": "Synth pad"},
   "instruments": [
     {"dataset_id": "temperature", "name": "Temperature", "instrument": "Piano (chords)", "units": "degC anomaly",
      "first_time_period": "1880-01", "last_time_period": "2025-12",
@@ -29,9 +29,9 @@ One entry per dataset the server has data for:
 | `co2` | Contrabass | ppm | 2002-09 → 2022-03 |
 | `precipitation` | Violins (melody) | mm/day of rain | 2000-06 → 2026-11 |
 | `snow` | Glockenspiel (melody) | mm/day of melted water | 2000-06 → 2026-11 |
-| `fires` | Trombones (melody) | days of the month with a fire | 2002-07 → 2026-11 |
-| `lightning` | Xylophone | share of the area with lightning (0–1) | 2017-03 → 2023-07 |
-| `night_lights` | Harp (melody) | brightness (0–1) | 2012-01 → 2023-12, one value per year |
+| `fires` | Trombones | days of the month with a fire | 2002-07 → 2026-11 |
+| `lightning` | Timpani | share of the area with lightning (0–1) | 2017-03 → 2023-07 |
+| `night_lights` | Synth pad | brightness (0–1) | 2012-01 → 2023-12, one value per year |
 
 `dataset_id` is what you send below, and it is the file prefix of the dataset's folder in the data volume (`fires`, `co2`, `lightning`) wherever the two can match. Also accepted: `co2_atmosphere` for `co2`, `wildfires` for `fires`, `rain` for `precipitation`, `snowfall` for `snow`, `nightlights` for `night_lights`.
 
@@ -83,7 +83,7 @@ Response: `zone_id`, `dataset_id`, `time_period`, `next_time_period`, `audio_dat
 - **30 seconds is 10 months**: one bar of music per month. The next period after `2015-01` is `2015-11`, not `2015-02`: use `next_time_period`, do not add one month yourself.
 - **`time_period` in the answer is where the music really starts.** It differs from the request only when you ask for a date before the first data.
 - **Several datasets**: each instrument plays where its own data exists and is silent elsewhere (temperature and precipitation from 1999: the violins come in in June 2000).
-- **Yearly data** (`night_lights`): the value is the year's, so the harp holds its note for 12 bars and changes in January.
+- **Yearly data** (`night_lights`): the value is the year's. The synth pad starts clearly each January, when the value changes, then fades slowly over the year to a softer background note.
 - **The same value is the same note** in every piece of the same area, so consecutive pieces connect.
 - **Errors**: `400` unknown dataset or no data for these points and this period; `422` malformed request (no points, latitude out of range, another `aggregation`).
 - A first request takes 2 to 5 seconds; the same request again is immediate.

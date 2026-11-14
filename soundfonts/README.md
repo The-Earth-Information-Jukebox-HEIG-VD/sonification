@@ -19,7 +19,7 @@
 | CO₂ (bass) | 43 | Solo Contrabass sustain |
 | Dust (melody) | 73 | Flute sustain (vibrato) |
 | Smoke (melody) | 60 | French Horn sustain |
-| Lightning | 13 | Xylophone (tuning corrected −15 cents) |
+| Lightning | 47 | Timpani (SoundFont: VSCO has no timpani mapped yet) |
 | Snowfall (melody) | 9 | Glockenspiel (tuning corrected −15 cents) |
 
 `--engine sf2` forces the SoundFont only; `--engine vsco` downloads the samples if they're missing.
@@ -40,7 +40,7 @@ Instruments used (GM program → GeneralUser preset):
 | Rain (melody) | 48 | Fast Strings (violins) |
 | Dust (melody) | 73 | Flute |
 | Smoke (melody) | 60 | French Horns |
-| Lightning | 13 | Xylophone |
+| Lightning | 47 | Timpani |
 
 ## Render
 ```bash

@@ -269,6 +269,13 @@ All fields are optional. The smallest request is `{}` (global zone, default data
 
 ```
 
+### New in v2.3 (instruments after a listening test)
+- lightning: **timpani** (was a xylophone, too close to the snow's glockenspiel).
+- fires: **trombones that swell and hold**, below the piano (was a melody in the piano's register).
+- night lights: a **synth pad** that starts clearly each time the yearly value changes, then fades slowly over the whole year to a softer background (was a harp plucked on every beat).
+- CO₂: the contrabass plays **an octave higher**, is re-bowed on every bar line and is louder, so laptop and phone speakers play it.
+- `/api/instruments` reports the new names.
+
 ### New in v2.2 (fires)
 - new variable from the team's data: **fires** (`fires`, trombones): the average number of days per month with at least one fire detected, July 2002 to November 2026. `wildfires` is accepted as another name.
 
@@ -285,7 +292,7 @@ All fields are optional. The smallest request is `{}` (global zone, default data
 - `JUKEBOX_FULL_API=0` (the Docker image): nothing else is served. Outside Docker the engine endpoints below stay available.
 
 ### New in v1.9 (lightning, and what the Docker image serves)
-- new variable from the team's data: **lightning** (`dataset_id: "lightning"`, xylophone). Its value is the share of the selected area with lightning in the month, from 0 to 1, not a number of flashes. It exists from March 2017 to July 2023 and only between 55°S and 55°N; an area entirely outside that band has no data (`400`).
+- new variable from the team's data: **lightning** (`dataset_id: "lightning"`, xylophone; timpani since v2.3). Its value is the share of the selected area with lightning in the month, from 0 to 1, not a number of flashes. It exists from March 2017 to July 2023 and only between 55°S and 55°N; an area entirely outside that band has no data (`400`).
 - **CO₂** (`dataset_id: "co2"`, contrabass) from the team's files, September 2002 to March 2022. The converter removes the outline of the source picture that is still in those files (about a fifth of the pixels); a very small area can therefore have little or no CO₂ data in some months.
 - the Docker image serves one dataset per variable (`real_temperature_*`, `real_precipitation_*`, `real_lightning_*`, `real_co2_*`), all at one bar per month, and **merges them per request**: each requested variable is read from its own dataset and they are lined up by date. Any combination can be asked for any start date. An instrument is silent for the months its data does not cover (its entry in `values` is `null` there), and a variable with no data at all in the period is left out of the piece.
 - `/api/sonify` answers with `source_datasets` (`{variable: dataset}`) when several datasets were merged; `source_dataset` is then the main variable's. `value` and `units` are those of the first requested variable that is in the piece.

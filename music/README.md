@@ -65,18 +65,20 @@ Variables that are **present all the time** (temperature, CO₂) form the harmon
 | voice | variable | instrument | data style (default) | musical style |
 |---|---|---|---|---|
 | **Harmony** C3–C5 | temperature (always) | **Piano, chords** | a chord on every beat; **its root = the temperature** (diatonic triad), accent on each bar | comping on the shared harmony, register follows temperature |
-| **Bass** E1–D3 | CO₂ (always) | **Contrabass** | pitch = value, held while unchanged | one root per bar |
+| **Bass** E2–D4 | CO₂ (always) | **Contrabass**, an octave above a usual bass part so small speakers play it | pitch = value, re-bowed on every bar line | one root per bar |
 | **Melody** G4–G6 | rain (sometimes) | **Violins** | pitch = value, loudness = amount, **tremolo** (up to 4 notes/beat) when it pours | gated legato line |
 | **Melody** C5–A6 | dust (sometimes) | **Flute** | airy line while dust is present | gated legato line |
 | **Melody** F3–D5 | smoke (sometimes) | **French horns** | line while there are fires | gated legato line |
 | **Melody** G4–E6 (sounds 8va) | snowfall (sometimes) | **Glockenspiel** | pitch = value while it snows (real snow flag from the extraction) | gated line |
-| **Sparkle** F5–F7 | lightning (sometimes) | **Xylophone** | hits per beat = flash density, pitch = value | beat patterns, roll before the climax |
+| **Percussion** E2–G3 | lightning (sometimes) | **Timpani** (thunder) | hits per beat = flash density, pitch = value | beat patterns, roll before the climax |
+| **Swell** E2–C4 | fires (sometimes) | **Trombones** | held, louder with more fires | held swell |
+| **Pad** D4–A5 | night lights (yearly) | **Synth pad**, the only electronic sound (human activity) | starts clearly when the yearly value changes, then fades slowly over the whole year | held swell |
 
 ## 2. Time: everything lives in bars
 - **1 frame = 1 bar** of 4 beats (24 months → 24 bars), plus a 2-bar final cadence on the tonic.
 - **Harmony:** one chord every **2 bars**, always changing on a bar line. CO₂ climbs a **tension ladder** I → vi → IV → ii → V (in minor: i → VI → iv → VII → v). Low CO₂ is home, high CO₂ is the dominant. Hysteresis keeps small wiggles from changing the chord. The contrabass plays that root, and every instrument takes its notes from the chord (the violins may add scale passing notes on weak beats).
 - **Entries and exits are decided per bar** with hysteresis (enter at `gate`, leave below 70% of it). Density levels are per bar too, so instruments never flicker on and off beat by beat.
-- Each section has **its own rhythmic value** (bass = whole notes, piano = whole/half/quarter, melodies = quarters to halves, xylophone = beats). Parts interlock instead of piling up. The script prints a polyphony check: typically 3–6 notes sound at once, 8 at most.
+- Each section has **its own rhythmic value** (bass = whole notes, piano = whole/half/quarter, melodies = quarters to halves, timpani = beats). Parts interlock instead of piling up. The script prints a polyphony check: typically 3–6 notes sound at once, 8 at most.
 - **Contour vs presence** (`--mapping hybrid`): pitch follows the value *relative to its range in the zone*, so every line is melodic. Entries and loudness follow the *absolute* amount: no dust over Europe means no piano.
 
 Without a CO₂ map, temperature picks the chords (`--harmony surface_temperature`). With neither, the harmony falls back to I–vi–IV–V. Everything above can be tuned in the `ORCHESTRA` table: register, gain, gate, density thresholds, mix level and pan.
@@ -89,8 +91,8 @@ Without a CO₂ map, temperature picks the chords (`--harmony surface_temperatur
 - louder overall, and fuller CC11 swells
 
 **Form.**
-- **Intro, "meet the orchestra":** the instruments that actually play in this zone enter one bar at a time (contrabass → piano → xylophone → then the melodies: violins, flute, horns), then a bar on V leads into the data. The JSON lists each entry with its time, so the UI can announce "CO₂ → contrabass" (good for accessibility).
-- **Climax:** the most anomalous bar (ties go to temperature). Everyone louder for 2 bars, melodies doubled an octave up, xylophone roll into it.
+- **Intro, "meet the orchestra":** the instruments that actually play in this zone enter one bar at a time (contrabass → piano → timpani → then the melodies: violins, flute, horns), then a bar on V leads into the data. The JSON lists each entry with its time, so the UI can announce "CO₂ → contrabass" (good for accessibility).
+- **Climax:** the most anomalous bar (ties go to temperature). Everyone louder for 2 bars, melodies doubled an octave up, timpani roll into it.
 - **Outro:** a 2-bar tonic cadence with a **ritardando** (tempo map down to 70%). Every note in the JSON also has `time_s` and `duration_s` in real seconds.
 
 **Expression.** Phrase hairpins (crescendo to bar 3, relax at bar 4), CC11 swells inside long string notes, and small human timing and velocity variations (`humanize` 0–1).
@@ -136,4 +138,4 @@ Demo pieces on the **real daily 2024 data** (`music/examples/daily/`): Switzerla
 
 Demo pieces on **real monthly data** (`music/examples/real/`): Switzerland 2022–24, El Niño 2015–17, global 2022–24, India 2021–23, each as `*_data` (default style) and `*_musical`.
 
-Good zones to try: `india` (monsoon violins, pre-monsoon dust flute, storm xylophone), `sahara` (flute almost always: dust), `europe` (summer heat), `arctic`, `global`.
+Good zones to try: `india` (monsoon violins, pre-monsoon dust flute, storm timpani), `sahara` (flute almost always: dust), `europe` (summer heat), `arctic`, `global`.

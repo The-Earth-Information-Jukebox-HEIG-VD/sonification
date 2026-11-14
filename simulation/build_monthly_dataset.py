@@ -100,7 +100,7 @@ SOURCES["co2"] = dict(pattern="co2_*.npy", reader="monthly_npy", factor=1.0, uni
 # share (0-1) of each pixel where the instrument saw lightning in the month. The space station only sees
 # 55S -> 55N: beyond that the files hold 0, which means "not observed", so those rows become NaN (lat_limit).
 # vmax 0.4: over a region the monthly mean is about 0.03 (median) to 0.1 (stormy season), so that range
-# drives the xylophone from a few hits to a roll; a single stormy pixel can reach 1.
+# drives the timpani from a few hits to a roll; a single stormy pixel can reach 1.
 SOURCES["lightning"] = dict(pattern="lightning_*.npy", reader="monthly_npy", factor=1.0,
                             units="share of area with lightning (0-1)", vmin=0.0, vmax=0.4, lat_limit=55.0,
                             source="ISS LIS lightning from the NASA SVS 5011 visualization, monthly share of each "

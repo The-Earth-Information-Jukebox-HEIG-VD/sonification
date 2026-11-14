@@ -15,9 +15,11 @@ Arranged "like a conductor":
     melody   G4..E6 (8va) snowfall             Glockenspiel            pitch = value while it snows
     melody   C5..A6       aerosol_dust         Flute                   pitch = value while dust is present
     melody   F3..D5       aerosol_smoke        French horns            pitch = value while smoke is present
-    sparkle  F5..F7       lightning            Xylophone               hits per beat = flash density, pitch = value
+    timpani  E2..G3       lightning            Timpani                 hits per beat = flash density, pitch = value
+    swell    E2..C4       fires                Trombones               held, louder with more fires
+    pad      D4..A5       nightlights          Synth pad               a note per year, fading slowly over the year
     harmony  C3..C5       surface_temperature  Piano (chords)          chord every beat, root = value / comping
-    bass     E1..D3       co2                  Contrabass              pitch = value / one root per bar
+    bass     E2..D4       co2                  Contrabass              pitch = value, re-bowed every bar / one root per bar
 
   TIME = BARS. One frame = one bar (4 beats). One chord every 2 bars, changing only on bar lines:
   CO2 (the slow foundation) climbs a TENSION LADDER I -> vi -> IV -> ii -> V (with hysteresis) and
@@ -55,14 +57,18 @@ SEVEN_NOTE_SCALES = [k for k, v in SCALES.items() if len(v) == 7]
 #   gate     : presence needed to enter     levels: presence thresholds for denser rhythm
 #   level    : mix level (scales velocity)  pan   : 0 left .. 127 right (orchestra seating)
 # ----------------------------------------------------------------------------
+LEVEL_CO2 = 1.15         # mix level of the CO2 bass (see its entry)
 ORCHESTRA = {
     # always present -> the foundation: harmony (piano chords) and bass
     "surface_temperature": dict(name="Temperature - Piano (chords)", role="harmony", program=0, channel=0,
                                 low=48, high=72, gain=1.0, gate=0.0, levels=[0.45, 0.75], level=0.65, pan=64,
                                 always_on=True),
+    # an octave higher than a real contrabass part (E2..D4, not E1..D3), re-bowed on every bar line and
+    # louder: below about 100 Hz laptop and phone speakers play almost nothing, and a note held for many
+    # bars fades into the background
     "co2":                 dict(name="CO2 - Contrabass", role="bass", program=43, channel=5,
-                                low=28, high=50, gain=1.0, gate=0.0, levels=[], level=0.90, pan=78,
-                                always_on=True),
+                                low=40, high=62, gain=1.0, gate=0.0, levels=[], level=LEVEL_CO2, pan=78,
+                                always_on=True, pulse="bar"),
     # present only sometimes -> they carry the melodies when they happen
     "precipitation":       dict(name="Rain - Violins (melody)", role="melody", program=48, channel=1,
                                 low=67, high=91, gain=2.5, gate=0.10, levels=[0.35, 0.65], level=0.90, pan=36,
@@ -74,17 +80,22 @@ ORCHESTRA = {
     "snowfall":            dict(name="Snow - Glockenspiel (melody)", role="melody", program=9, channel=6,
                                 low=67, high=88, gain=8.0, gate=0.06, levels=[0.35, 0.65], level=1.0, pan=16,
                                 restrike=True),   # sounds an octave higher; percussive -> re-struck every beat
-    "lightning":           dict(name="Lightning - Xylophone", role="timpani", program=13, channel=4,
-                                low=77, high=101, gain=3.0, gate=0.08, levels=[0.35, 0.60, 0.85], level=0.75, pan=104),
-    # fires (days of the month with a fire): trombones, a darker brass than the smoke's horns. A first choice,
-    # made when the fires data arrived: change the instrument and its numbers here.
-    "fires":               dict(name="Fires - Trombones (melody)", role="melody", program=57, channel=8,
-                                low=48, high=69, gain=3.0, gate=0.08, levels=[0.45, 0.75], level=0.85, pan=88),
-    # yearly data (one value per year, held for its 12 months): a plucked harp, brighter = higher. A first choice,
-    # made when the night-lights data arrived: change the instrument and its numbers here.
-    "nightlights":         dict(name="Night lights - Harp (melody)", role="melody", program=46, channel=7,
-                                low=60, high=84, gain=2.0, gate=0.03, levels=[0.35, 0.65], level=0.80, pan=52,
-                                restrike=True),   # plucked -> re-struck every beat
+    # lightning -> thunder: timpani, low; hits per beat = flash density. (Was a xylophone, too close to the
+    # glockenspiel of the snow.)
+    "lightning":           dict(name="Lightning - Timpani", role="timpani", program=47, channel=4,
+                                low=40, high=55, gain=3.0, gate=0.08, levels=[0.35, 0.60, 0.85], level=0.85, pan=104),
+    # fires (days of the month with a fire): trombones that swell and hold, louder with more fires, below
+    # the piano's chords instead of a melody inside them
+    "fires":               dict(name="Fires - Trombones", role="swell", program=57, channel=8,
+                                low=40, high=60, gain=3.0, gate=0.08, levels=[0.45, 0.75], level=0.85, pan=88),
+    # night lights (human-made, yearly: one value per year, held for its 12 months): a soft synthesizer pad,
+    # the only electronic sound. It starts at full level when the value changes (each January) and fades slowly,
+    # over the whole year, to a soft background (`fade_floor` of the full level) reached just before the next change:
+    # leaves room: a drone for the whole year became tiring. `smooth` False: the yearly steps are not blurred.
+    # level 0.60: about as loud as the CO2 bass, 2 dB under the piano while it sounds (0.30 was 8 dB under: lost).
+    "nightlights":         dict(name="Night lights - Synth pad", role="swell", program=89, channel=7,
+                                low=62, high=81, gain=2.0, gate=0.03, levels=[0.35, 0.65], level=0.60, pan=52,
+                                smooth=False, fade=True, fade_floor=0.75),    # 0.75: ends about 10 dB under the piano
 }
 # ----------------------------------------------------------------------------
 # Regional palettes (fun!): same roles and registers, local instruments.
@@ -630,7 +641,17 @@ def data_melody(cfg, c):
 
 
 def data_bass(cfg, c):          # CO2: same, low register
-    return _data_line(cfg, c, sustain=True), []
+    notes = _data_line(cfg, c, sustain=True)
+    if cfg.get("pulse") != "bar":
+        return notes, []
+    out, bpb = [], c["bpb"]                     # pulse="bar": a held note is re-bowed on every bar line
+    for p, s_, d, v in notes:
+        end = s_ + d / 0.95
+        while s_ < end - 1e-9:
+            nxt = min(end, (int(s_ // bpb) + 1) * bpb)
+            out.append((p, s_, (nxt - s_) * 0.95, v))
+            s_ = nxt
+    return out, []
 
 
 def data_harmony(cfg, c):       # dust: re-struck every beat while present, louder = more dust
@@ -638,8 +659,34 @@ def data_harmony(cfg, c):       # dust: re-struck every beat while present, loud
 
 
 def data_swell(cfg, c):         # smoke: held line, CC11 expression = amount of smoke
+    if cfg.get("fade"):
+        return _data_pad(cfg, c)
     notes = _data_line(cfg, c, sustain=True, gate=True, vel_from_presence=True)
     ccs = [(11, 25 + 102 * (p if np.isfinite(p) else 0), i) for i, p in enumerate(c["pres"])]
+    return notes, ccs
+
+
+def _data_pad(cfg, c):
+    """A note each time the value CHANGES (yearly data: each January), held until the next change. It starts
+    at full level and fades slowly over the whole note (the whole year) to `fade_floor` of it (CC11 expression):
+    the new value is stated clearly, then stays as a softer background. pitch = value, loudness = amount.
+    A piece that starts in the middle of a year fades over the months left until January."""
+    grid, notes, ccs = _grid(cfg, c), [], []
+    floor = float(cfg.get("fade_floor", 0.75))
+    norm, pres = c["norm"], c["pres"]
+    starts = [i for i, nv in enumerate(norm)
+              if np.isfinite(nv) and np.isfinite(pres[i]) and pres[i] >= cfg["gate"]
+              and (i == 0 or not np.isfinite(norm[i - 1]) or nv != norm[i - 1])]
+    for k, i in enumerate(starts):
+        end = starts[k + 1] if k + 1 < len(starts) else len(norm)
+        j = i
+        while j < end and np.isfinite(norm[j]):           # stop at the first beat without data
+            j += 1
+        notes.append((_pitch(norm[i], grid), i, (j - i) * 0.98, cfg["level"] * (55 + 60 * pres[i])))
+        steps = max(1, (j - i) * 4)                       # expression every quarter beat: a smooth fade
+        for s in range(steps):
+            g = floor + (1 - floor) * (1 - s / steps)
+            ccs.append((11, round(127 * g), i + s / 4))
     return notes, ccs
 
 
@@ -1004,7 +1051,7 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
 
     for var, d in series.items():
         cfg = orch[var]
-        smooth = cfg["role"] in SMOOTH_ROLES
+        smooth = cfg.get("smooth", cfg["role"] in SMOOTH_ROLES)     # an instrument can opt out (yearly steps)
         vals = sample_beats(d["mean"], n_ref, n_beats, fpb, bpb, loop, smooth)
         vmin, vmax = d["meta"].get("vmin", np.nanmin(vals)), d["meta"].get("vmax", np.nanmax(vals))
         absn = np.clip((vals - vmin) / ((vmax - vmin) or 1), 0, 1)
