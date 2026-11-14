@@ -74,6 +74,16 @@ Variables that are **present all the time** (temperature, CO₂) form the harmon
 | **Swell** E2–C4 | fires (sometimes) | **Trombones** | held, louder with more fires | held swell |
 | **Pad** D4–A5 | night lights (yearly) | **Synth pad**, the only electronic sound (human activity) | starts clearly when the yearly value changes, then fades slowly over the whole year | held swell |
 
+### Planned: the two datasets still missing
+Not in the `ORCHESTRA` table yet: the data has not arrived. These are the intended choices, to add when it does.
+
+| variable | instrument | data style | why |
+|---|---|---|---|
+| **Arctic sea ice** (smooth, large seasonal cycle, long decline, polar only) | **Bowed glass** (GM 92, already in the `ice` palette), high and sustained | **loudness = amount of ice**, pitch = value; silent where the area has no sea ice | melting is heard as the sound thinning out and disappearing: the loss is audible as absence |
+| **CO₂ exchange with plants** (signed: uptake in the growing season, release the rest of the year) | **A woodwind**, clarinet (GM 71) or bassoon (GM 70), low-middle register | a fixed note marks **zero**: uptake on one side of it, release on the other, so the sign is audible | the planet breathing; it pairs with the contrabass (the CO₂ in the air, and the plants that breathe it) |
+
+To check by ear when the ice data arrives: bowed glass and the night-lights synth pad are both pad-like sounds. They should stay apart (the ice sits higher and follows its amount continuously; the night lights fade once a year), but an A/B listening test should confirm it before release.
+
 ## 2. Time: everything lives in bars
 - **1 frame = 1 bar** of 4 beats (24 months → 24 bars), plus a 2-bar final cadence on the tonic.
 - **Harmony:** one chord every **2 bars**, always changing on a bar line. CO₂ climbs a **tension ladder** I → vi → IV → ii → V (in minor: i → VI → iv → VII → v). Low CO₂ is home, high CO₂ is the dominant. Hysteresis keeps small wiggles from changing the chord. The contrabass plays that root, and every instrument takes its notes from the chord (the violins may add scale passing notes on weak beats).
