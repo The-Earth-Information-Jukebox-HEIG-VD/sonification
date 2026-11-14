@@ -153,3 +153,29 @@ def test_precipitation_one_file_per_month(tmp_path):
     (tmp_path / "empty").mkdir()
     r = run("--precip", tmp_path / "empty", "--out", out / "e")
     assert r.returncode != 0 and "precipitation_monthly_*.npz" in (r.stderr + r.stdout)
+
+
+def fake_lightning(folder: Path, months: list[str]):
+    """lightning_<YYYY>_<MM>.npy like the team's: 720 x 1440 float16, share of the pixel with lightning (0-1).
+    0.2 everywhere between 30S and 30N, and 0 elsewhere, INCLUDING beyond 55 deg where nothing is observed."""
+    for m in months:
+        a = np.zeros((720, 1440), np.float16)
+        a[240:480] = 0.2
+        np.save(folder / f"lightning_{m.replace('-', '_')}.npy", a)
+
+
+def test_lightning(tmp_path):
+    src, out = tmp_path / "l", tmp_path / "out"
+    src.mkdir()
+    fake_lightning(src, ["2017-03", "2017-04"])
+    r = run("--lightning", src, "--out", out, "--res", 1)
+    assert r.returncode == 0, r.stderr
+    z = np.load(out / "real_monthly_2017_2017_lightning.npz")
+    meta = json.loads((out / "real_monthly_2017_2017_lightning.json").read_text())
+    d, lat = z["data"], z["lat"]
+    assert d.shape == (2, 180, 360) and meta["vmax"] == 0.4 and meta["real"] is True and "share" in meta["units"]
+    assert np.allclose(d[0][np.abs(lat) < 30], 0.2, atol=1e-3)                 # the tropics
+    assert np.all(d[0][(np.abs(lat) > 30) & (np.abs(lat) < 55)] == 0)          # observed, no lightning
+    assert np.isnan(d[0][np.abs(lat) > 55]).all()                              # not observed: no data, not zero
+    assert np.allclose(z["intensity"][0][np.abs(lat) < 30], 0.5, atol=2e-3)    # 0.2 / 0.4
+

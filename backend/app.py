@@ -44,7 +44,7 @@ CACHE_DIR = Path(os.environ.get("JUKEBOX_CACHE_DIR", ROOT / "backend" / "cache")
 # datasets converted from the team's raw folders by backend/prepare_data.py (the data folder can be read-only)
 BUILT_DIR = Path(os.environ.get("JUKEBOX_BUILT_DIR") or CACHE_DIR / "_datasets")
 CORS = [o.strip() for o in os.environ.get("JUKEBOX_CORS", "*").split(",")]
-API_VERSION = "1.8"
+API_VERSION = "1.9"
 COMPOSITION_ID = re.compile(r"[0-9a-f]{16}")         # what cache_key() produces
 
 app = FastAPI(title="Earth Information Jukebox: sonification API", version=API_VERSION,

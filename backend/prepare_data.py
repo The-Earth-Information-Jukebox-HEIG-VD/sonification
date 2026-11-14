@@ -6,6 +6,7 @@ In the deployment the `datasets` image fills a read-only volume with the extract
 
     <raw>/precipitation_2000_2026/precipitation_<YYYY>_<MM>.npy      (or precipitation_monthly_<YYYY>.npz)
     <raw>/temperature_anomaly_1880_2025/temperature_anomaly_<YYYY>_<MM>.npy
+    <raw>/lightning_2017_2023/lightning_<YYYY>_<MM>.npy
 
 The API reads `<prefix>_<variable>.npz + .json` (simulation/INTENSITY_MAP_SPEC.md), so this script runs
 simulation/build_monthly_dataset.py on the folders it finds and writes the result to a folder the API
@@ -42,6 +43,7 @@ MONTH = "[0-9][0-9][0-9][0-9]_[0-9][0-9]"
 INPUTS = {
     "precip": [f"precipitation_{MONTH}.npy", "precipitation_monthly_*.npz"],     # one file per month, or per year
     "temperature": [f"temperature_anomaly_{MONTH}.npy"],
+    "lightning": [f"lightning_{MONTH}.npy"],
 }
 
 
@@ -54,14 +56,19 @@ def input_files(need: str, folder: Path) -> list[Path]:
 #   prefix : the dataset is served as <prefix>_<first year>_<last year>. Each recipe has its own, so two
 #            recipes that happen to cover the same years never overwrite each other.
 RECIPES = [
-    # every month the team has for each variable, one dataset per variable
     # One bar = one month in every dataset. The frontend decides what it asks for (start date, length, and
     # "frames_per_bar" in the request if it wants a faster time scale), so no dataset gets a scale of its own.
+    # 1. every month the team has for each variable, one dataset per variable
     dict(name="temperature history", prefix="real_temperature", needs=["temperature"], args=["--res", "2"]),
     dict(name="precipitation", prefix="real_precipitation", needs=["precip"], args=["--res", "1"]),
-    # the months both have, in one dataset, so the two instruments can play together
+    dict(name="lightning", prefix="real_lightning", needs=["lightning"], args=["--res", "1"]),
+    # 2. the months several variables share, in one dataset, so their instruments can play together.
+    #    Two of them: lightning only exists for a few years and would otherwise cut the long
+    #    precipitation + temperature series down to those years.
     dict(name="precipitation + temperature", prefix="real_monthly", needs=["precip", "temperature"],
          args=["--res", "1"]),
+    dict(name="precipitation + temperature + lightning", prefix="real_all",
+         needs=["precip", "temperature", "lightning"], args=["--res", "1"]),
 ]
 
 

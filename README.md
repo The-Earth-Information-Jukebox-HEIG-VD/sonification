@@ -45,6 +45,7 @@ The image is self-contained for audio: `tinysoundfont`, `ffmpeg` and the General
 ```
 /app/data/precipitation_2000_2026/precipitation_<YYYY>_<MM>.npy          (one file per month, mm/h)
 /app/data/temperature_anomaly_1880_2025/temperature_anomaly_<YYYY>_<MM>.npy
+/app/data/lightning_2017_2023/lightning_<YYYY>_<MM>.npy                  (share of each pixel with lightning, 0-1)
 ```
 At start-up `backend/serve.py` runs `backend/prepare_data.py` in the background. It converts those folders with `simulation/build_monthly_dataset.py` into `/app/cache/_datasets`, which the API also scans:
 
@@ -52,9 +53,11 @@ At start-up `backend/serve.py` runs `backend/prepare_data.py` in the background.
 |---|---|
 | `real_temperature_1880_2025` | temperature anomaly, every month since 1880, 2° |
 | `real_precipitation_2000_2026` | precipitation, June 2000 → November 2026, 1° |
-| `real_monthly_2000_2025` | both, on the months they share, 1° |
+| `real_lightning_2017_2023` | lightning activity, March 2017 → July 2023, 1°, 55°S–55°N |
+| `real_monthly_2000_2025` | precipitation + temperature, on the months they share, 1° |
+| `real_all_2017_2023` | precipitation + temperature + lightning, on the months all three share, 1° |
 
-One bar is one month in all three. The frontend decides what it asks for: the start date, the length (`duration_s`), and a faster time scale if it wants one (`"frames_per_bar": 12` in the request makes one bar a year).
+One bar is one month in all of them. The frontend decides what it asks for: the start date, the length (`duration_s`), and a faster time scale if it wants one (`"frames_per_bar": 12` in the request makes one bar a year).
 
 - The API answers at once; `GET /api/health` has `"preparing_data": true` until the conversion is over, and each dataset appears in `GET /api/datasets` when it is ready. The first start takes a few minutes; with `/app/cache` on a volume, later starts convert nothing unless the raw files changed.
 - The recipes are the `RECIPES` list at the top of `backend/prepare_data.py`. To try them without Docker: `python backend/prepare_data.py --raw ../datasets/data --out simulation/output`.

@@ -9,7 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "simulation"))
-from test_build_monthly_dataset import fake_precip_monthly, fake_temperature, fake_year  # noqa: E402
+from test_build_monthly_dataset import fake_lightning, fake_precip_monthly, fake_temperature, fake_year  # noqa: E402
 
 
 def prepare(raw, out, *extra):
@@ -125,4 +125,25 @@ def test_yearly_precipitation_files_still_work(tmp_path):
     log = prepare(raw, tmp_path / "built")
     assert "1 dataset(s) built" in log and "skip 'temperature history'" in log
     assert (tmp_path / "built" / "real_precipitation_2000_2001_precipitation.npz").exists()
+
+
+def test_lightning_gets_its_own_dataset_and_a_combined_one(tmp_path):
+    """Lightning covers fewer months than the rest: it must not shorten the precipitation + temperature dataset."""
+    raw, out = raw_like_the_datasets_repo(tmp_path), tmp_path / "built"
+    (raw / "lightning_2001_2001").mkdir()
+    fake_lightning(raw / "lightning_2001_2001", ["2001-02", "2001-03", "2001-04"])
+    (raw / "co2_2002_2022").mkdir()                              # a folder the data step does not use (yet)
+    (raw / "co2_2002_2022" / "co2_2002_09.npy").write_bytes(b"not read")
+    log = prepare(raw, out)
+    assert "5 dataset(s) built" in log
+    names = sorted(p.name for p in out.glob("*.npz"))
+    assert names == ["real_all_2001_2001_lightning.npz", "real_all_2001_2001_precipitation.npz",
+                     "real_all_2001_2001_surface_temperature.npz", "real_lightning_2001_2001_lightning.npz",
+                     "real_monthly_2000_2001_precipitation.npz", "real_monthly_2000_2001_surface_temperature.npz",
+                     "real_precipitation_2000_2001_precipitation.npz", "real_temperature_2000_2001_surface_temperature.npz"]
+    shape = lambda n: json.loads((out / n).with_suffix(".json").read_text())["shape"][0]   # noqa: E731
+    assert shape("real_monthly_2000_2001_precipitation.npz") == 4          # 2000-12 .. 2001-03, not cut by lightning
+    assert shape("real_all_2001_2001_lightning.npz") == 2                  # 2001-02 .. 2001-03: what all three share
+    assert shape("real_lightning_2001_2001_lightning.npz") == 3
+    assert not any("co2" in n for n in names)
 

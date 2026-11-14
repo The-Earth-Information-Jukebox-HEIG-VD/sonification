@@ -327,6 +327,10 @@ All fields are optional. The smallest request is `{}` (global zone, default data
 
 ```
 
+### New in v1.9 (lightning, and what the Docker image serves)
+- new variable from the team's data: **lightning** (`dataset_id: "lightning"`, xylophone). Its value is the share of the selected area with lightning in the month, from 0 to 1, not a number of flashes. It exists from March 2017 to July 2023 and only between 55°S and 55°N; an area entirely outside that band has no data (`400`).
+- the Docker image serves `real_temperature_*`, `real_precipitation_*`, `real_lightning_*`, `real_monthly_*` (precipitation + temperature) and `real_all_*` (all three), all at one bar per month. The server picks among them per request, as described under v1.7.
+
 ### New in v1.8 (temperature anomaly 1880 → 2025)
 - new dataset `real_monthly_1880_2025`: the team's monthly temperature anomaly, January 1880 to December 2025, 2° (`python simulation/build_monthly_dataset.py --temperature DIR --res 2 --frames-per-bar 12`). One bar = one year by default, so a 30 s chunk of `/api/sonify` is 10 years.
 - its values are **anomalies** (degC warmer or colder than normal), not temperatures. They are played by the same piano and requested with the same `dataset_id: "temperature"`. The server picks this dataset when the date is before the other datasets start (e.g. `"time_period": "1950"`); to force it, send `options.dataset`.

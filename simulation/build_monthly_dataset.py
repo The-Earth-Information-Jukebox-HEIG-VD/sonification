@@ -12,6 +12,8 @@ Input  (from the data-extraction side, monthly, on the team's 0.25 deg common gr
     temperature_anomaly_<YYYY>_<MM>.npy         (--temperature DIR, one file per month, 1880-01 ->)
         [720,1440] float16, temperature anomaly in degC, NaN = no data,
         row 0 = 90N, column 0 = 180W (see the README.md of that folder)
+    lightning_<YYYY>_<MM>.npy                   (--lightning DIR, one file per month, 2017-03 -> 2023-07)
+        [720,1440] float16, share of the pixel with lightning (0-1), observed between 55S and 55N only
     co2_<YYYY>_<MM>.npy                         (--co2 DIR, one file per month, 2002-09 -> 2022-03)
         [356,720] float32, ppm, 0.5 deg covering 89N -> 89S (assumed: row 0 = north, column 0 = 180W,
         like the other files; that folder has no README)
@@ -23,6 +25,7 @@ Output (one monthly time axis, one frame = one bar):
     real_monthly_<first year>_<last year>_<variable>.npz + .json
       precipitation         REAL  mm/day (precip_mmh * 24), regridded to `--res` with an area-weighted block mean
       co2                   REAL  ppm, vmin/vmax 365..435 (the range of the delivered files)
+      lightning             REAL  share of area with lightning (0-1), vmin/vmax 0..0.4, NaN beyond 55 deg
       surface_temperature   REAL  temperature ANOMALY in degC (meta "anomaly": true), played by the piano like the
                                   temperature of the other datasets; vmin/vmax -5..+5 instead of -40..+40.
                                   The source is a 2 deg map copied onto 0.25 deg, so `--res 2` loses nothing.
@@ -76,7 +79,16 @@ SOURCES = {
 }
 SOURCES["co2"] = dict(pattern="co2_*.npy", reader="monthly_npy", factor=1.0, units="ppm", vmin=365.0, vmax=435.0,
                       source="Monthly CO2 (ppm), 0.5 deg grid, extracted by the team (REAL)")
-INPUT_ARGS = {"precipitation": "precip", "surface_temperature": "temperature", "co2": "co2"}  # variable -> option
+# share (0-1) of each pixel where the instrument saw lightning in the month. The space station only sees
+# 55S -> 55N: beyond that the files hold 0, which means "not observed", so those rows become NaN (lat_limit).
+# vmax 0.4: over a region the monthly mean is about 0.03 (median) to 0.1 (stormy season), so that range
+# drives the xylophone from a few hits to a roll; a single stormy pixel can reach 1.
+SOURCES["lightning"] = dict(pattern="lightning_*.npy", reader="monthly_npy", factor=1.0,
+                            units="share of area with lightning (0-1)", vmin=0.0, vmax=0.4, lat_limit=55.0,
+                            source="ISS LIS lightning from the NASA SVS 5011 visualization, monthly share of each "
+                                   "0.25 deg pixel with lightning, 55S-55N, extracted by the team (REAL)")
+INPUT_ARGS = {"precipitation": "precip", "surface_temperature": "temperature", "co2": "co2",
+              "lightning": "lightning"}                                                   # variable -> option
 
 
 def block_mean(stack: np.ndarray, f: int, area: np.ndarray) -> np.ndarray:
@@ -126,6 +138,9 @@ def read_monthly_npy(folder: Path, spec: dict, res: float, start=None, end=None,
             raise SystemExit(f"{path}: expected {shape} like the other months, got {a.shape}")
         if pad:                                    # e.g. 89N -> 89S: the polar rows have no data
             a = np.pad(a.astype(np.float32), ((pad, pad), (0, 0)), constant_values=np.nan)
+        if spec.get("lat_limit"):                  # not observed beyond this latitude: no data, not zero
+            a = a.astype(np.float32)
+            a[np.abs(lat) > spec["lat_limit"]] = np.nan
         frames.append(block_mean(a[None], int(round(f)), area)[0] * np.float32(spec["factor"]))
         if i % 240 == 0 or i == len(found) - 1:
             print(f"  read {Path(path).name} ({i + 1}/{len(found)})", flush=True)
@@ -169,6 +184,7 @@ def main():
     ap.add_argument("--precip", help="folder with precipitation_monthly_<YYYY>.npz (or precipitation_<YYYY>_<MM>.npy)")
     ap.add_argument("--temperature", help="folder with temperature_anomaly_<YYYY>_<MM>.npy (the team's common grid)")
     ap.add_argument("--co2", help="folder with co2_<YYYY>_<MM>.npy")
+    ap.add_argument("--lightning", help="folder with lightning_<YYYY>_<MM>.npy (share of each pixel with lightning, 0-1)")
     ap.add_argument("--res", type=float, default=1.0, choices=[0.25, 0.5, 1.0, 2.0], help="output grid in degrees")
     ap.add_argument("--start", help="first month to keep, 'YYYY-MM'")
     ap.add_argument("--end", help="last month to keep, 'YYYY-MM'")

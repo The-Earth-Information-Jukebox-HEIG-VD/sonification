@@ -104,6 +104,7 @@ python -m pytest simulation/test_build_monthly_dataset.py -q      # converter te
 |---|---|---|---|
 | precipitation | mm/day | NASA GPM IMERG (GIBS layer `IMERG_Precipitation_Rate`), monthly mean; yearly `.npz` or one `precipitation_YYYY_MM.npy` per month | `precip_mmh` × 24, area-weighted block mean from 0.25° to `--res` |
 | co2 | ppm | the team's `co2_YYYY_MM.npy` (2002-09 → 2022-03, 356 × 720 = 0.5°, 89N → 89S, assumed north first) | NaN-aware block mean; the missing polar rows are NaN; `vmin/vmax` 365..435 |
+| lightning | share of area with lightning (0–1) | the team's `lightning_YYYY_MM.npy` (ISS LIS, from NASA SVS 5011; March 2017 → July 2023) | `--lightning DIR`; area-weighted block mean; **NaN beyond 55°** (the station does not see further: the 0 in the files there means "not observed"); `vmin/vmax` 0..0.4 |
 | surface_temperature | degC **anomaly** | the team's `temperature_anomaly_YYYY_MM.npy` (1880-01 → 2025-12, 2° values copied onto the 0.25° common grid) | block mean ignoring NaN (no data stays NaN); `vmin/vmax` −5..+5; `"anomaly": true` in the `.json` |
 
 - One frame is one month, so one bar is one month (June 2000 to November 2026 = 318 bars for the whole series).
