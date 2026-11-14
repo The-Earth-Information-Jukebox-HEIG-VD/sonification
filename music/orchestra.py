@@ -917,7 +917,8 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
         times = z["time"] if "time" in z.files else None
         m, _ = zone_series(z["data"].astype(np.float32), z["lat"], mask)
         # anomaly vs the seasonal normal, computed on the FULL series before any time window
-        _, zsc, _ = comp.seasonal_anomaly(m, times, log=var in comp.SKEWED)
+        _, zsc, _ = comp.seasonal_anomaly(m, times, log=var in comp.SKEWED,
+                                          already_anomaly=bool(meta.get("anomaly")))
         max_frames = None
         if bars_wanted is not None:        # frames per bar: the request, else the dataset hint (daily data: 7)
             max_frames = max(1, int(round(bars_wanted * float(frames_per_bar or meta.get("frames_per_bar", 1.0)))))
@@ -1144,6 +1145,7 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
             "name": p["cfg"]["name"], "role": p["cfg"]["role"], "program": p["cfg"]["program"],
             "channel": p["cfg"]["channel"], "pan": p["cfg"]["pan"], "register": [p["cfg"]["low"], p["cfg"]["high"]],
             "units": series[p["var"]]["meta"].get("units"), "source": series[p["var"]]["meta"].get("source"),
+            "anomaly": bool(series[p["var"]]["meta"].get("anomaly", False)),      # values are anomalies, not levels
             "values_per_beat": [None if not np.isfinite(x) else round(float(x), 4) for x in series[p["var"]]["values"]],
             "presence_per_beat": [round(float(x), 3) for x in p["pres"]],
             "pitch_range": [min((n[0] for n in p["notes"]), default=None), max((n[0] for n in p["notes"]), default=None)],

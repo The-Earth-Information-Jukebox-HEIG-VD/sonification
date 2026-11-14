@@ -326,6 +326,11 @@ All fields are optional. The smallest request is `{}` (global zone, default data
 
 ```
 
+### New in v1.8 (temperature anomaly 1880 → 2025)
+- new dataset `real_monthly_1880_2025`: the team's monthly temperature anomaly, January 1880 to December 2025, 2° (`python simulation/build_monthly_dataset.py --temperature DIR --res 2 --frames-per-bar 12`). One bar = one year by default, so a 30 s chunk of `/api/sonify` is 10 years.
+- its values are **anomalies** (degC warmer or colder than normal), not temperatures. They are played by the same piano and requested with the same `dataset_id: "temperature"`. The server picks this dataset when the date is before the other datasets start (e.g. `"time_period": "1950"`); to force it, send `options.dataset`.
+- new boolean `anomaly`: in `GET /api/datasets` (`variables[v].anomaly`), in `/api/compose` (`score.instruments[v].anomaly`) and in `/api/sonify` (for the main variable). When it is `true`, show the value as "+1.2 °C vs normal", not "1.2 °C".
+
 ### New in v1.7 (the team's real monthly data, dataset chosen per request)
 - new dataset `real_monthly_2000_2026`: the extraction team's real monthly precipitation, June 2000 to November 2026 (`python simulation/build_monthly_dataset.py --precip DIR`).
 - **the server now chooses the dataset for each request** that does not name one. It takes the datasets that have every requested variable, then prefers one whose dates cover the start date, then the one with the most real variables. So `precipitation` in `2003-05` is served from `real_monthly_2000_2026`, and `temperature` from a dataset that has it. To force one, send `dataset` (`/api/compose`) or `options.dataset` (`/api/sonify`). A request with no variable and no date still gets the default dataset of `GET /api/datasets`.

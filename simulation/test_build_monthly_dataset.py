@@ -58,3 +58,43 @@ def test_missing_month_is_refused(tmp_path):
     fake_year(src, 2000, [1, 2, 4])                                    # March is missing
     r = run("--precip", src, "--out", tmp_path / "out", "--res", 2)
     assert r.returncode != 0 and "2000-02 -> 2000-04" in (r.stderr + r.stdout)
+
+
+def fake_temperature(folder: Path, months: list[str]):
+    """Monthly .npy files like the team's temperature_anomaly_common_grid_npy: 720 x 1440 float16, NaN = no data.
+    North +1 degC, south -1 degC, the last row band (Antarctica) without data, + 0.1 degC per month."""
+    for i, m in enumerate(months):
+        a = np.full((720, 1440), -1.0, np.float16)
+        a[:360] = 1.0
+        a += np.float16(0.1 * i)
+        a[704:] = np.nan
+        np.save(folder / f"temperature_anomaly_{m.replace('-', '_')}.npy", a)
+
+
+def test_temperature_anomaly(tmp_path):
+    src, out = tmp_path / "temp", tmp_path / "out"
+    src.mkdir()
+    fake_temperature(src, ["1880-11", "1880-12", "1881-01", "1881-02"])
+    r = run("--temperature", src, "--out", out, "--res", 2, "--start", "1880-12", "--frames-per-bar", 12)
+    assert r.returncode == 0, r.stderr
+    z = np.load(out / "real_monthly_1880_1881_surface_temperature.npz")
+    meta = json.loads((out / "real_monthly_1880_1881_surface_temperature.json").read_text())
+    assert z["data"].shape == (3, 90, 180) and [str(t)[:7] for t in z["time"]] == ["1880-12", "1881-01", "1881-02"]
+    assert np.allclose(z["data"][0, :45], 1.1, atol=1e-2) and np.allclose(z["data"][0, 45:88], -0.9, atol=1e-2)
+    assert np.isnan(z["data"][:, 88:]).all()                     # no data stays no data (not 0)
+    assert meta["anomaly"] is True and meta["vmin"] == -5 and meta["frames_per_bar"] == 12 and meta["real"] is True
+    assert list(z["n_days"]) == [31, 31, 28]
+
+
+def test_common_months(tmp_path):
+    """Precipitation 2000-11 .. 2001-03 + temperature 2001-01 .. 2001-06: one dataset with the 3 shared months."""
+    psrc, tsrc, out = tmp_path / "p", tmp_path / "t", tmp_path / "out"
+    psrc.mkdir(), tsrc.mkdir()
+    fake_year(psrc, 2000, [11, 12])
+    fake_year(psrc, 2001, [1, 2, 3])
+    fake_temperature(tsrc, [f"2001-{m:02d}" for m in range(1, 7)])
+    r = run("--precip", psrc, "--temperature", tsrc, "--out", out, "--res", 2)
+    assert r.returncode == 0, r.stderr
+    for var in ("precipitation", "surface_temperature"):
+        z = np.load(out / f"real_monthly_2001_2001_{var}.npz")
+        assert [str(t)[:7] for t in z["time"]] == ["2001-01", "2001-02", "2001-03"]

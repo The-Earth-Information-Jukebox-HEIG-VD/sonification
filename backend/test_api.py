@@ -18,7 +18,10 @@ DAILY = next((k for k in _ds if k.startswith("real_daily")), None)
 # the best dataset that has the whole orchestra (the default one can hold a single real variable, e.g. real_monthly_*)
 FULL = max((k for k in _ds if {"surface_temperature", "co2"} <= set(_ds[k]["variables"])),
            key=lambda k: (len(_ds[k]["real_variables"]), len(_ds[k]["variables"]), _ds[k]["frames"]), default=None)
-REAL_MONTHLY = next((k for k in _ds if k.startswith("real_monthly")), None)
+REAL_MONTHLY = next((k for k in _ds if k.startswith("real_monthly") and "precipitation" in _ds[k]["variables"]), None)
+# the team's temperature anomaly 1880 -> 2025 (python simulation/build_monthly_dataset.py --temperature DIR --res 2)
+TEMP_HISTORY = next((k for k in _ds if k.startswith("real_monthly") and
+                     _ds[k]["variables"].get("surface_temperature", {}).get("anomaly")), None)
 
 
 def test_health():
@@ -289,6 +292,28 @@ def test_real_monthly_precipitation():
         t = client.post("/api/sonify", json={"zone_id": "europe", "dataset_id": "temperature", "embed_audio": False,
                                              "duration_s": 6}).json()
         assert t["source_dataset"] != REAL_MONTHLY and t["units"] == "degC"
+
+
+def test_temperature_anomaly_history():
+    if not TEMP_HISTORY:
+        print("skip: no temperature anomaly dataset (build_monthly_dataset.py --temperature DIR)"); return
+    d = _ds[TEMP_HISTORY]
+    assert d["time_start"].startswith("1880-01") and d["variables"]["surface_temperature"]["real"]
+    # one bar per year by default; the global warming trend climbs in pitch and the last bars ring hot
+    s = client.post("/api/compose", json={"dataset": TEMP_HISTORY, "zone": "global", "start": "1880-01",
+                                          "end": "2025-12", "audio": False}).json()["score"]
+    t = s["instruments"]["surface_temperature"]
+    assert s["frames_per_bar"] == 12 and s["n_bars"] == 146 and t["anomaly"] is True
+    v = [x for x in t["values_per_beat"] if x is not None]
+    assert sum(v[:40]) / 40 < 0 < 1.0 < sum(v[-8:]) / 8                   # about -0.2 degC in the 1880s, +1.2 in 2025
+    roots = [min(n["pitch"] for n in t["notes"] if int(n["start"]) // 4 == b) for b in (0, 145)]
+    assert roots[1] > roots[0]
+    hot = [int(n["start"]) // 4 for n in s["instruments"]["anomaly_markers"]["notes"]]
+    assert hot and min(hot) > 100                                          # alarms only in the recent decades
+    # a request for temperature in 1950 is served by this dataset (the others start much later)
+    j = client.post("/api/sonify", json={"zone_id": "switzerland", "dataset_id": "temperature", "time_period": "1950",
+                                         "embed_audio": False, "duration_s": 8}).json()
+    assert j["source_dataset"] == TEMP_HISTORY and j["anomaly"] is True and j["time_period"].startswith("1950")
 
 
 def test_real_daily_precipitation():

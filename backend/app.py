@@ -41,7 +41,7 @@ from zone_to_midi import ZONES  # noqa: E402
 DATA_DIR = Path(os.environ.get("JUKEBOX_DATA_DIR", ROOT / "simulation" / "output"))
 CACHE_DIR = Path(os.environ.get("JUKEBOX_CACHE_DIR", ROOT / "backend" / "cache"))
 CORS = [o.strip() for o in os.environ.get("JUKEBOX_CORS", "*").split(",")]
-API_VERSION = "1.7"
+API_VERSION = "1.8"
 
 app = FastAPI(title="Earth Information Jukebox: sonification API", version=API_VERSION,
               description="Turns NASA EIC intensity maps into an orchestra (MIDI + audio).")
@@ -79,6 +79,7 @@ def scan_datasets() -> dict:
                                "instrument": orchestra.ORCHESTRA.get(var, {}).get("name")}
         g.setdefault("times", times)
         g["variables"][var]["real"] = bool(meta.get("real", False))
+        g["variables"][var]["anomaly"] = bool(meta.get("anomaly", False))    # e.g. temperature in degC vs a normal
         g["resolution_deg"] = meta.get("resolution_deg")
     for g in groups.values():
         g["real_variables"] = sorted(v for v, info in g["variables"].items() if info.get("real"))
@@ -497,7 +498,8 @@ def sonify(req: SonifyRequest, request: Request):
             "aggregation": req.aggregation, "time_end": end_time[:n] if end_time else None,
             "duration_s": score["duration_s"], "composition_id": out["id"], "cached": out["cached"],
             "source_dataset": out["request"]["dataset"],          # which dataset of GET /api/datasets was played
-            "real_data": bool(main and group.get("variables", {}).get(main, {}).get("real"))}
+            "real_data": bool(main and group.get("variables", {}).get(main, {}).get("real")),
+            "anomaly": bool(main and group.get("variables", {}).get(main, {}).get("anomaly"))}   # value = degC vs normal
 
 
 @app.get("/api/compositions/{comp_id}")

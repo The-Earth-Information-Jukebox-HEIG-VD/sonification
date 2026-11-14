@@ -38,11 +38,20 @@ def frames_per_year(times, default=12.0) -> float:
 SKEWED = {"precipitation", "snowfall", "lightning", "aerosol_smoke", "aerosol_dust"}   # analysed in log space
 
 
-def seasonal_anomaly(series: np.ndarray, times=None, reference_years: float = 3.0, log: bool = False):
+def seasonal_anomaly(series: np.ndarray, times=None, reference_years: float = 3.0, log: bool = False,
+                     already_anomaly: bool = False):
     """Anomaly = value - seasonal normal. The normal is a mean + annual harmonic fitted on a reference
     period (the first `reference_years`, or the whole series if shorter), like climatologists use a
-    baseline period. Returns (anomaly, z_score, baseline)."""
+    baseline period. Returns (anomaly, z_score, baseline).
+    already_anomaly: the data are anomalies already (e.g. degC away from a 30-year normal): the normal is 0
+    and z = value / robust spread of the whole series, so a record month stays a record in any window."""
     x = np.asarray(series, dtype=float)
+    if already_anomaly:
+        ok = x[np.isfinite(x)]
+        scale = 1.4826 * np.median(np.abs(ok - np.median(ok))) if len(ok) > 3 else 0.0
+        scale = max(scale, 0.5 * float(np.std(ok))) if len(ok) > 3 else scale
+        scale = scale if np.isfinite(scale) and scale > 1e-9 else 1.0
+        return x, np.clip(x / scale, -4, 4), np.zeros(len(x))
     if log:                                   # skewed quantities (rain, lightning...): log scale
         x = np.log1p(np.clip(x, 0, None) * 10)
     n = len(x)

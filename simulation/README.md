@@ -91,14 +91,19 @@ Turns the extraction team's monthly files (one `.npz` per year, 0.25°) into one
 python simulation/build_monthly_dataset.py --precip ../data_processing/precipitation/monthly_2000_2026
 # -> output/real_monthly_2000_2026_precipitation.npz / .json   (318 months, 1°, about 88 MB)
 python simulation/build_monthly_dataset.py --precip DIR --res 2 --start 2015-01 --min-days 20
+python simulation/build_monthly_dataset.py --temperature temperature_anomaly_common_grid_npy --res 2 --frames-per-bar 12
+# -> output/real_monthly_1880_2025_surface_temperature.npz / .json   (1752 months, 2°, about 58 MB, ~1 min)
 python -m pytest simulation/test_build_monthly_dataset.py -q      # converter test with small made-up files
 ```
 
 | variable | units | source | how |
 |---|---|---|---|
 | precipitation | mm/day | NASA GPM IMERG (GIBS layer `IMERG_Precipitation_Rate`), monthly mean | `precip_mmh` × 24, area-weighted block mean from 0.25° to `--res` |
+| surface_temperature | degC **anomaly** | the team's `temperature_anomaly_YYYY_MM.npy` (1880-01 → 2025-12, 2° values copied onto the 0.25° common grid) | block mean ignoring NaN (no data stays NaN); `vmin/vmax` −5..+5; `"anomaly": true` in the `.json` |
 
 - One frame is one month, so one bar is one month (June 2000 to November 2026 = 318 bars for the whole series).
 - Months averaged over fewer than 25 days of data are listed in the `.json` as `partial_months` (October 2025: 24 days, November 2026: 13 days). `--min-days 20` drops such a month when it is the first or the last of the series.
 - `snow_days` (number of days with snow) is not converted: the snowfall instrument expects an amount in mm/day.
-- To add a variable when the team delivers it (e.g. temperature), add a line to `SOURCES` in the script.
+- Temperature: the values are already anomalies, so the composer takes the value itself as the anomaly (z = value / robust spread of the whole series) instead of fitting a seasonal normal. The piano plays it like any temperature: higher = warmer than normal. Use `--res 2`: the source has 2° information, a finer grid only makes the file bigger. `--frames-per-bar 12` makes one bar = one year (one beat = one season) the default for this dataset; 146 years is otherwise 1752 bars.
+- With several inputs (`--precip DIR --temperature DIR`) only the months they all have are kept, because a dataset has one time axis. Build the 1880 → 2025 temperature on its own to keep the whole history.
+- To add a variable when the team delivers it, add a line to `SOURCES` (and to `INPUT_ARGS`) in the script.
