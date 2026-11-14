@@ -93,12 +93,17 @@ python simulation/build_monthly_dataset.py --precip ../data_processing/precipita
 python simulation/build_monthly_dataset.py --precip DIR --res 2 --start 2015-01 --min-days 20
 python simulation/build_monthly_dataset.py --temperature temperature_anomaly_common_grid_npy --res 2 --frames-per-bar 12
 # -> output/real_monthly_1880_2025_surface_temperature.npz / .json   (1752 months, 2°, about 58 MB, ~1 min)
+D=datasets/data      # the team's datasets repo, cloned inside this one (gitignored)
+python simulation/build_monthly_dataset.py --temperature $D/temperature_anomaly_1880_2025 --precip $D/precipitation_2000_2026 \
+    --co2 $D/co2_2002_2022 --res 1 --frames-per-bar 3 --prefix team_monthly_2002_2022
+# -> output/team_monthly_2002_2022_{precipitation,surface_temperature,co2}   (235 common months 2002-09 .. 2022-03, ~2 min)
 python -m pytest simulation/test_build_monthly_dataset.py -q      # converter test with small made-up files
 ```
 
 | variable | units | source | how |
 |---|---|---|---|
-| precipitation | mm/day | NASA GPM IMERG (GIBS layer `IMERG_Precipitation_Rate`), monthly mean | `precip_mmh` × 24, area-weighted block mean from 0.25° to `--res` |
+| precipitation | mm/day | NASA GPM IMERG (GIBS layer `IMERG_Precipitation_Rate`), monthly mean; yearly `.npz` or one `precipitation_YYYY_MM.npy` per month | `precip_mmh` × 24, area-weighted block mean from 0.25° to `--res` |
+| co2 | ppm | the team's `co2_YYYY_MM.npy` (2002-09 → 2022-03, 356 × 720 = 0.5°, 89N → 89S, assumed north first) | NaN-aware block mean; the missing polar rows are NaN; `vmin/vmax` 365..435 |
 | surface_temperature | degC **anomaly** | the team's `temperature_anomaly_YYYY_MM.npy` (1880-01 → 2025-12, 2° values copied onto the 0.25° common grid) | block mean ignoring NaN (no data stays NaN); `vmin/vmax` −5..+5; `"anomaly": true` in the `.json` |
 
 - One frame is one month, so one bar is one month (June 2000 to November 2026 = 318 bars for the whole series).

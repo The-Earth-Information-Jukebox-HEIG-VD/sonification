@@ -7,13 +7,22 @@ Input  (from the data-extraction side, monthly, on the team's 0.25 deg common gr
         months [T] 'YYYY-MM', precip_mmh [T,720,1440] (mm/h, mean rate of the month),
         snow_days [T,720,1440], n_days [T] (days with data in the month),
         lat [720] (north -> south), lon [1440], cell_area_km2 [720,1440]
+    precipitation_<YYYY>_<MM>.npy               (--precip DIR also accepts one file per month, as in the
+        [720,1440] float16, mm/h                    team's datasets repo: datasets/data/precipitation_2000_2026)
     temperature_anomaly_<YYYY>_<MM>.npy         (--temperature DIR, one file per month, 1880-01 ->)
         [720,1440] float16, temperature anomaly in degC, NaN = no data,
         row 0 = 90N, column 0 = 180W (see the README.md of that folder)
+    co2_<YYYY>_<MM>.npy                         (--co2 DIR, one file per month, 2002-09 -> 2022-03)
+        [356,720] float32, ppm, 0.5 deg covering 89N -> 89S (assumed: row 0 = north, column 0 = 180W,
+        like the other files; that folder has no README)
+
+Any .npy grid that covers 360 deg of longitude in W columns is read: step = 360 / W, and the H rows are
+centred on the equator (rows missing at the poles become NaN).
 
 Output (one monthly time axis, one frame = one bar):
     real_monthly_<first year>_<last year>_<variable>.npz + .json
       precipitation         REAL  mm/day (precip_mmh * 24), regridded to `--res` with an area-weighted block mean
+      co2                   REAL  ppm, vmin/vmax 365..435 (the range of the delivered files)
       surface_temperature   REAL  temperature ANOMALY in degC (meta "anomaly": true), played by the piano like the
                                   temperature of the other datasets; vmin/vmax -5..+5 instead of -40..+40.
                                   The source is a 2 deg map copied onto 0.25 deg, so `--res 2` loses nothing.
@@ -30,6 +39,8 @@ Usage
   python simulation/build_monthly_dataset.py --precip ../data_processing/precipitation/monthly_2000_2026
   python simulation/build_monthly_dataset.py --precip DIR --res 2 --start 2015-01 --min-days 20
   python simulation/build_monthly_dataset.py --temperature temperature_anomaly_common_grid_npy --res 2 --frames-per-bar 12
+  D=datasets/data; python simulation/build_monthly_dataset.py --temperature $D/temperature_anomaly_1880_2025 \
+      --precip $D/precipitation_2000_2026 --co2 $D/co2_2002_2022 --prefix team_monthly    # all three, 2002-09 .. 2022-03
 Needs: numpy
 """
 from __future__ import annotations
@@ -53,6 +64,7 @@ HERE = Path(__file__).resolve().parent
 #   factor  : multiply to get the units of simulate_variables.VARIABLES (mm/h * 24 = mm/day)
 SOURCES = {
     "precipitation": dict(pattern="precipitation_monthly_*.npz", array="precip_mmh", factor=24.0,
+                          npy_pattern="precipitation_*_*.npy",          # or one .npy per month (datasets repo)
                           source="NASA GPM IMERG daily precipitation rate (GIBS layer IMERG_Precipitation_Rate), "
                                  "monthly mean, extracted by the team (REAL)"),
     # one .npy per month; the values are anomalies, so they get their own range (and "anomaly": true in the
@@ -62,7 +74,9 @@ SOURCES = {
                                 source="Monthly surface temperature anomaly (degC), 2 deg map copied onto the team's "
                                        "0.25 deg common grid, extracted by the team (REAL)"),
 }
-INPUT_ARGS = {"precipitation": "precip", "surface_temperature": "temperature"}     # variable -> command-line option
+SOURCES["co2"] = dict(pattern="co2_*.npy", reader="monthly_npy", factor=1.0, units="ppm", vmin=365.0, vmax=435.0,
+                      source="Monthly CO2 (ppm), 0.5 deg grid, extracted by the team (REAL)")
+INPUT_ARGS = {"precipitation": "precip", "surface_temperature": "temperature", "co2": "co2"}  # variable -> option
 
 
 def block_mean(stack: np.ndarray, f: int, area: np.ndarray) -> np.ndarray:
@@ -81,27 +95,37 @@ def block_mean(stack: np.ndarray, f: int, area: np.ndarray) -> np.ndarray:
         return np.where(den > 0, num / den, np.nan).astype(np.float32)
 
 
-def read_monthly_npy(folder: Path, spec: dict, res: float, start=None, end=None):
-    """One [720, 1440] .npy per month (name ..._YYYY_MM.npy) -> (months, data [T, H, W], n_days [T]).
-    Only the months inside [start, end] are read (the full 1880 -> 2025 folder is 3.4 GB)."""
+def read_monthly_npy(folder: Path, spec: dict, res: float, start=None, end=None, pattern=None):
+    """One [H, W] .npy per month (name ..._YYYY_MM.npy) -> (months, data [T, H', W'], n_days [T]).
+    The input step is 360 / W degrees; the H rows are centred on the equator, north first.
+    Only the months inside [start, end] are read (the full 1880 -> 2025 temperature folder is 3.4 GB)."""
+    pattern = pattern or spec["pattern"]
     found = []
-    for path in glob.glob(str(folder / spec["pattern"])):
+    for path in glob.glob(str(folder / pattern)):
         m = re.search(r"(\d{4})_(\d{2})\.npy$", path)
         if m:
             found.append((f"{m.group(1)}-{m.group(2)}", path))
     found = sorted(x for x in found if (not start or x[0] >= start) and (not end or x[0] <= end))
     if not found:
-        raise SystemExit(f"no {spec['pattern']} in {folder} for the requested months")
-    f = res / 0.25
+        raise SystemExit(f"no {pattern} in {folder} for the requested months")
+    shape = np.load(found[0][1], mmap_mode="r").shape
+    step = 360.0 / shape[1]
+    full_h = int(round(180 / step))
+    pad = (full_h - shape[0]) // 2
+    if pad < 0 or full_h - shape[0] != 2 * pad:
+        raise SystemExit(f"{found[0][1]}: {shape} is not a global grid centred on the equator")
+    f = res / step
     if abs(f - round(f)) > 1e-6 or round(f) < 1:
-        raise SystemExit(f"--res {res} must be a multiple of the input grid (0.25 deg)")
-    lat = 90 - 0.125 - 0.25 * np.arange(720)
-    area = np.cos(np.deg2rad(lat))[:, None] * np.ones((1, 1440))
+        raise SystemExit(f"--res {res} must be a multiple of the input grid ({step:g} deg)")
+    lat = 90 - step / 2 - step * np.arange(full_h)
+    area = np.cos(np.deg2rad(lat))[:, None] * np.ones((1, shape[1]))
     frames = []
     for i, (month, path) in enumerate(found):
         a = np.load(path, allow_pickle=False)
-        if a.shape != (720, 1440):
-            raise SystemExit(f"{path}: expected 720 x 1440, got {a.shape}")
+        if a.shape != shape:
+            raise SystemExit(f"{path}: expected {shape} like the other months, got {a.shape}")
+        if pad:                                    # e.g. 89N -> 89S: the polar rows have no data
+            a = np.pad(a.astype(np.float32), ((pad, pad), (0, 0)), constant_values=np.nan)
         frames.append(block_mean(a[None], int(round(f)), area)[0] * np.float32(spec["factor"]))
         if i % 240 == 0 or i == len(found) - 1:
             print(f"  read {Path(path).name} ({i + 1}/{len(found)})", flush=True)
@@ -114,6 +138,9 @@ def read_variable(folder: Path, spec: dict, res: float, start=None, end=None):
     """All yearly files of one variable -> (months ['YYYY-MM'], data [T, H, W] in final units, n_days [T])."""
     if spec.get("reader") == "monthly_npy":
         return read_monthly_npy(folder, spec, res, start, end)
+    if spec.get("npy_pattern") and not glob.glob(str(folder / spec["pattern"])) \
+            and glob.glob(str(folder / spec["npy_pattern"])):        # one .npy per month instead of yearly .npz
+        return read_monthly_npy(folder, spec, res, start, end, pattern=spec["npy_pattern"])
     files = sorted(glob.glob(str(folder / spec["pattern"])))
     if not files:
         raise SystemExit(f"no {spec['pattern']} in {folder}")
@@ -139,8 +166,9 @@ def read_variable(folder: Path, spec: dict, res: float, start=None, end=None):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--precip", help="folder with precipitation_monthly_<YYYY>.npz from the extraction team")
+    ap.add_argument("--precip", help="folder with precipitation_monthly_<YYYY>.npz (or precipitation_<YYYY>_<MM>.npy)")
     ap.add_argument("--temperature", help="folder with temperature_anomaly_<YYYY>_<MM>.npy (the team's common grid)")
+    ap.add_argument("--co2", help="folder with co2_<YYYY>_<MM>.npy")
     ap.add_argument("--res", type=float, default=1.0, choices=[0.25, 0.5, 1.0, 2.0], help="output grid in degrees")
     ap.add_argument("--start", help="first month to keep, 'YYYY-MM'")
     ap.add_argument("--end", help="last month to keep, 'YYYY-MM'")

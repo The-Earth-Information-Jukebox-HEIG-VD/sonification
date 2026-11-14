@@ -98,3 +98,26 @@ def test_common_months(tmp_path):
     for var in ("precipitation", "surface_temperature"):
         z = np.load(out / f"real_monthly_2001_2001_{var}.npz")
         assert [str(t)[:7] for t in z["time"]] == ["2001-01", "2001-02", "2001-03"]
+
+
+def test_monthly_npy_precipitation_and_co2(tmp_path):
+    """The datasets repo: precipitation_<YYYY>_<MM>.npy (720 x 1440, mm/h) and co2_<YYYY>_<MM>.npy (356 x 720, 89N..89S)."""
+    psrc, csrc, out = tmp_path / "p", tmp_path / "c", tmp_path / "out"
+    psrc.mkdir(), csrc.mkdir()
+    for m in ("2003-01", "2003-02", "2003-03"):
+        p = np.zeros((720, 1440), np.float16)
+        p[:360] = 0.5                                                       # mm/h in the north
+        np.save(psrc / f"precipitation_{m.replace('-', '_')}.npy", p)
+    for m in ("2003-02", "2003-03", "2003-04"):
+        c = np.full((356, 720), 380.0, np.float32)
+        c[:178] = 400.0                                                     # north: 400 ppm
+        np.save(csrc / f"co2_{m.replace('-', '_')}.npy", c)
+    r = run("--precip", psrc, "--co2", csrc, "--out", out, "--res", 2, "--prefix", "team")
+    assert r.returncode == 0, r.stderr
+    p, c = np.load(out / "team_precipitation.npz"), np.load(out / "team_co2.npz")
+    assert [str(t)[:7] for t in c["time"]] == ["2003-02", "2003-03"] == [str(t)[:7] for t in p["time"]]
+    assert np.allclose(p["data"][0, :45], 12.0, atol=0.05) and np.all(p["data"][0, 45:] == 0)   # mm/h * 24
+    assert c["data"].shape == (2, 90, 180)
+    assert np.allclose(c["data"][0, 1:45], 400) and np.allclose(c["data"][0, 45:89], 380)
+    assert np.allclose(c["data"][0, 0], 400) and np.allclose(c["data"][0, 89], 380)   # half-covered polar rows
+    assert json.loads((out / "team_co2.json").read_text())["vmin"] == 365

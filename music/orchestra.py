@@ -996,6 +996,9 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
 
     # ---- anomaly markers (data style): triangle = unusually hot month, woodblock = unusually cold
     marker_var = LEAD_VAR if LEAD_VAR in series else None
+    # not when the temperature is already an anomaly: the piano itself plays the anomaly, a second track would repeat it
+    if marker_var and series[marker_var]["meta"].get("anomaly"):
+        marker_var = None
     if markers and not musical and marker_var:
         zb = series[marker_var]["bar_z"]
         mnotes, mlev = [], []

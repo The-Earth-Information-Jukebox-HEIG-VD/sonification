@@ -308,8 +308,7 @@ def test_temperature_anomaly_history():
     assert sum(v[:40]) / 40 < 0 < 1.0 < sum(v[-8:]) / 8                   # about -0.2 degC in the 1880s, +1.2 in 2025
     roots = [min(n["pitch"] for n in t["notes"] if int(n["start"]) // 4 == b) for b in (0, 145)]
     assert roots[1] > roots[0]
-    hot = [int(n["start"]) // 4 for n in s["instruments"]["anomaly_markers"]["notes"]]
-    assert hot and min(hot) > 100                                          # alarms only in the recent decades
+    assert set(s["instruments"]) == {"surface_temperature"}                # the piano alone: no extra marker track
     # a request for temperature in 1950 is served by this dataset (the others start much later)
     j = client.post("/api/sonify", json={"zone_id": "switzerland", "dataset_id": "temperature", "time_period": "1950",
                                          "embed_audio": False, "duration_s": 8}).json()
