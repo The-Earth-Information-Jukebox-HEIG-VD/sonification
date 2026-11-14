@@ -823,19 +823,23 @@ def resolve_palette(palette, zone=None, bbox=None):
     return name
 
 
-def _time_window(times, start, end):
-    """Indices of frames within [start, end]; start/end are ISO dates (prefix ok) or frame indices."""
+def _time_window(times, start, end, count=None):
+    """Indices of frames within [start, end]; start/end are ISO dates (prefix ok) or frame indices.
+    count: keep at most this many frames from the first one (a piece of a given length)."""
     n = len(times) if times is not None else None
     if start is None and end is None:
-        return None
+        return None if count is None else slice(0, count)
     if isinstance(start, int) or isinstance(end, int) or times is None:
         lo = int(start or 0); hi = int(end if end is not None else (n or 10**9) - 1)
-        return slice(lo, hi + 1)
-    ts = [str(t) for t in times]
-    idx = [i for i, t in enumerate(ts) if (start is None or t >= str(start)) and (end is None or t[:len(str(end))] <= str(end))]
-    if not idx:
-        raise ComposeError(f"no frames between {start} and {end}")
-    return slice(idx[0], idx[-1] + 1)
+    else:
+        ts = [str(t) for t in times]
+        idx = [i for i, t in enumerate(ts) if (start is None or t >= str(start)) and (end is None or t[:len(str(end))] <= str(end))]
+        if not idx:
+            raise ComposeError(f"no frames between {start} and {end}")
+        lo, hi = idx[0], idx[-1]
+    if count is not None:
+        hi = min(hi, lo + count - 1)
+    return slice(lo, hi + 1)
 
 
 def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None, loop=False,
@@ -845,12 +849,16 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
             preview=False, render=False, reverb=0.28, audio_format="wav", verbose=False,
             intro=True, tension=True, climax=True, humanize=0.5,
             style="data", quantize="scale", markers=True, marker_threshold=1.5, audio_engine="auto",
-            cells=None, cells_grid=None):
+            cells=None, cells_grid=None, duration_s=None):
     """Data maps -> score. Writes MIDI (+ stems, JSON, optional PNG/audio) to out_dir and returns
     a dict with the score document, file paths and stats.
 
     The area is a preset `zone`, a lat/lon `bbox`, or `cells`: a list of [row, col] positions on
-    the data array (any shape of area). `cells` wins over `bbox`, which wins over `zone`."""
+    the data array (any shape of area). `cells` wins over `bbox`, which wins over `zone`.
+
+    duration_s: play this many seconds of data starting at `start` (instead of giving `end`).
+    As many bars as fit at about `bpm` are taken, then the tempo is nudged so that they last
+    exactly duration_s. Near the end of the dataset, where fewer frames are left, the piece is shorter."""
     log = print if verbose else (lambda *a, **k: None)
     if style not in ("data", "musical"):
         raise ComposeError("style must be 'data' or 'musical'")
@@ -859,6 +867,12 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
     musical = style == "musical"
     if not musical:      # data-faithful: nothing that isn't in the data
         intro, climax, humanize, add_ending = False, False, None, False
+    bars_wanted = None
+    if duration_s is not None:
+        if not duration_s > 0:
+            raise ComposeError("duration_s must be a positive number of seconds")
+        bars_wanted = max(1, int(round(duration_s * bpm / (60.0 * beats_per_bar))))
+        bpm = round(bars_wanted * beats_per_bar * 60.0 / duration_s, 3)     # these bars last exactly duration_s
     use_cells = cells is not None
     pal_name = resolve_palette(palette, zone, use_cells or bbox)
     orch = apply_palette(pal_name)
@@ -908,7 +922,10 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
         m, _ = zone_series(z["data"].astype(np.float32), z["lat"], mask)
         # anomaly vs the seasonal normal, computed on the FULL series before any time window
         _, zsc, _ = comp.seasonal_anomaly(m, times, log=var in comp.SKEWED)
-        win = _time_window(times, start, end)
+        max_frames = None
+        if bars_wanted is not None:        # frames per bar: the request, else the dataset hint (daily data: 7)
+            max_frames = max(1, int(round(bars_wanted * float(frames_per_bar or meta.get("frames_per_bar", 1.0)))))
+        win = _time_window(times, start, end, max_frames)
         if win is not None:
             m, zsc = m[win], zsc[win]
             times = times[win] if times is not None else None
@@ -1120,6 +1137,7 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
         "duration_s": round(b2s(total_beats), 2),
         "tempo_map": [{"beat": tb, "bpm": round(tp, 2)} for tb, tp in tmap],
         "time_start": bar_time(0), "time_end": bar_time(n_bars - 1),
+        "time_last_frame": None if times is None else str(times[-1]),     # time_end is the START of the last bar
         "harmony_source": hsrc or "progression",
         "sections": sections,
         "bars": [{"index": b, "start_beat": intro_beats + b * bpb, "start_s": round(b2s(intro_beats + b * bpb), 3),
@@ -1199,6 +1217,8 @@ def main():
     ap.add_argument("--surface", choices=["all", "land", "ocean"], default="all")
     ap.add_argument("--start", help="first frame: ISO date (e.g. 2024-06) or frame index")
     ap.add_argument("--end", help="last frame: ISO date or frame index")
+    ap.add_argument("--duration", type=float, help="seconds of music from --start (instead of --end); the tempo is "
+                                                   "nudged so the bars that fit last exactly this long")
     ap.add_argument("--loop", action="store_true", help="cyclic data (e.g. 12 months)")
     ap.add_argument("--mapping", choices=["hybrid", "relative", "absolute"], default="hybrid",
                     help="hybrid: melodic contour from zone-relative values, activity from absolute amounts")
@@ -1249,6 +1269,7 @@ def main():
                 bbox=[float(x) for x in a.bbox.split(",")] if a.bbox else None,
                 cells=np.load(a.cells, allow_pickle=False) if a.cells else None,
                 cells_grid=[int(x) for x in a.cells_grid.split(",")] if a.cells_grid else None,
+                duration_s=a.duration,
                 surface=a.surface, start=num_or_str(a.start), end=num_or_str(a.end), loop=a.loop,
                 mapping=a.mapping, key=a.key, scale=a.scale, harmony=a.harmony, chord_bars=a.chord_bars,
                 bpm=a.bpm, beats_per_bar=a.beats_per_bar, frames_per_bar=a.frames_per_bar,

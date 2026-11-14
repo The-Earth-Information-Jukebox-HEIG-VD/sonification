@@ -16,9 +16,11 @@ Config (environment variables):
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -29,7 +31,7 @@ import numpy as np
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, Field, ValidationError, field_validator, model_validator
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "music"))
@@ -39,7 +41,7 @@ from zone_to_midi import ZONES  # noqa: E402
 DATA_DIR = Path(os.environ.get("JUKEBOX_DATA_DIR", ROOT / "simulation" / "output"))
 CACHE_DIR = Path(os.environ.get("JUKEBOX_CACHE_DIR", ROOT / "backend" / "cache"))
 CORS = [o.strip() for o in os.environ.get("JUKEBOX_CORS", "*").split(",")]
-API_VERSION = "1.5"
+API_VERSION = "1.6"
 
 app = FastAPI(title="Earth Information Jukebox: sonification API", version=API_VERSION,
               description="Turns NASA EIC intensity maps into an orchestra (MIDI + audio).")
@@ -112,8 +114,12 @@ class ComposeRequest(BaseModel):
     cells_grid: Optional[list[int]] = Field(None, description="[rows, cols] of the array the positions refer to, when it is not "
                                             "the dataset grid (GET /api/datasets -> variables[v].grid); the selection is rescaled")
     surface: Literal["all", "land", "ocean"] = "all"
-    start: Optional[str | int] = Field(None, description="first frame: ISO date prefix ('2024-06') or frame index")
-    end: Optional[str | int] = Field(None, description="last frame: ISO date prefix or frame index")
+    start: Optional[str | int] = Field(None, description="first frame: date as text ('2024-06', '2024') or frame index (number)")
+    end: Optional[str | int] = Field(None, description="last frame: date as text or frame index")
+    year: Optional[int] = Field(None, ge=1800, le=2200, description="start date as numbers: year (instead of start)")
+    month: Optional[int] = Field(None, ge=1, le=12, description="start date as numbers: month 1-12 (needs year)")
+    duration_s: Optional[float] = Field(None, gt=0, le=600, description="seconds of music from the start date (instead of end); "
+                                        "exact in data style, the tempo is nudged to fit")
     variables: Optional[list[str]] = Field(None, description="subset of variables / instruments (default: all)")
     palette: str = Field("orchestra", description="'orchestra' (default), 'auto' (regional instruments) or a palette name")
     key: str = Field("C", description="tonic, e.g. C, D, F#, Bb")
@@ -151,6 +157,16 @@ class ComposeRequest(BaseModel):
                 raise ValueError("longitudes must be within -180..180")
         return v
 
+    @field_validator("start", "end")
+    @classmethod
+    def _date(cls, v):
+        """'2024-3' -> '2024-03' (dates are compared as text, so months and days need two digits)."""
+        if isinstance(v, str):
+            m = re.fullmatch(r"\s*(\d{4})-(\d{1,2})(?:-(\d{1,2}))?\s*", v)
+            if m:
+                v = "-".join([m.group(1)] + [f"{int(g):02d}" for g in m.groups()[1:] if g])
+        return v
+
     @field_validator("cells")
     @classmethod
     def _cells(cls, v):
@@ -176,12 +192,26 @@ class ComposeRequest(BaseModel):
             rows, cols = self.cells_grid
             if any(p[0] >= rows or p[1] >= cols for p in self.cells):
                 raise ValueError(f"cells must be inside cells_grid ({rows} x {cols})")
+        if self.month is not None and self.year is None:
+            raise ValueError("month needs year")
+        if self.year is not None:
+            if self.start is not None:
+                raise ValueError("send the start date either as start or as year/month, not both")
+            self.start = f"{self.year:04d}" + (f"-{self.month:02d}" if self.month else "")
         return self
+
+
+def frame_or_date(v):
+    """Numbers and short digit strings ('12') are frame indices; a 4-digit string ('2024') is a year."""
+    if isinstance(v, str) and v.isdigit() and len(v) != 4:
+        return int(v)
+    return v
 
 
 def cache_key(req: ComposeRequest, dataset_id: str, data_stamp) -> str:
     payload = req.model_dump(exclude={"include_notes"})
     payload["dataset"] = dataset_id
+    payload["year"] = payload["month"] = None                    # already folded into start
     if req.cells is not None:
         payload["zone"] = payload["bbox"] = None
         payload["cells"] = sorted(set(map(tuple, req.cells)))   # same area in another order = same piece
@@ -294,12 +324,12 @@ def compose(req: ComposeRequest, request: Request):
         if done:
             return build_response(request, key, req.include_notes, True, time.perf_counter() - t0)
         folder.mkdir(parents=True, exist_ok=True)
-        start = int(req.start) if isinstance(req.start, str) and req.start.isdigit() else req.start
-        end = int(req.end) if isinstance(req.end, str) and req.end.isdigit() else req.end
+        start, end = frame_or_date(req.start), frame_or_date(req.end)
         try:
             orchestra.compose(
                 [str(f) for f in group["files"]], zone=None if (req.bbox or req.cells) else req.zone,
                 bbox=None if req.cells else req.bbox, cells=req.cells, cells_grid=req.cells_grid if req.cells else None,
+                duration_s=req.duration_s,
                 surface=req.surface, start=start, end=end, loop=req.loop, mapping=req.mapping,
                 key=req.key, scale=req.scale, bpm=req.bpm, palette=req.palette, only=req.variables,
                 frames_per_bar=req.frames_per_bar,
@@ -314,6 +344,128 @@ def compose(req: ComposeRequest, request: Request):
                 "n_cells": len(req.cells) if req.cells else None}             # only how many were sent
         (folder / "request.json").write_text(json.dumps(echo, default=str))
         return build_response(request, key, req.include_notes, False, time.perf_counter() - t0)
+
+
+# ----------------------------------------------------------------------------
+# Frontend contract: selected points + one time period -> a chunk of audio inside the JSON.
+# The frontend plays the chunk, then asks again with `next_time_period`.
+# ----------------------------------------------------------------------------
+VARIABLE_ALIASES = {"temperature": "surface_temperature", "temp": "surface_temperature",
+                    "rain": "precipitation", "precip": "precipitation", "dust": "aerosol_dust",
+                    "smoke": "aerosol_smoke", "fire": "aerosol_smoke", "carbon_dioxide": "co2", "snow": "snowfall"}
+POINT_GRID = (1800, 3600)      # lat/lng points are placed on a 0.1 degree grid, then rescaled onto each data map
+SHORT_IDS = {"surface_temperature": "temperature", "aerosol_dust": "dust", "aerosol_smoke": "smoke"}   # variable -> dataset_id
+ROLE_LABELS = {"timpani": "percussion"}
+
+
+@app.get("/api/instruments")
+def instruments(palette: str = "orchestra", zone: Optional[str] = None):
+    """Which instrument plays which dataset. `dataset_id` is what POST /api/sonify accepts."""
+    try:
+        pal = orchestra.resolve_palette(palette, zone)
+    except orchestra.ComposeError as e:
+        raise HTTPException(400, str(e))
+    ds = scan_datasets()
+    have = ds[default_dataset()]["variables"] if ds else {}
+    rows = []
+    for var, cfg in orchestra.apply_palette(pal).items():
+        label, _, instrument = cfg["name"].partition(" - ")
+        short = SHORT_IDS.get(var, var)
+        rows.append({
+            "dataset_id": short, "variable": var, "label": label, "instrument": instrument,
+            "role": ROLE_LABELS.get(cfg["role"], cfg["role"]),
+            "always_playing": bool(cfg.get("always_on")),       # false: plays only while the phenomenon is present
+            "units": have.get(var, {}).get("units"), "available": var in have,
+            "real_data": bool(have.get(var, {}).get("real")),
+            "also_accepted": sorted({var, *[a for a, v in VARIABLE_ALIASES.items() if v == var]} - {short}),
+            "midi_program": cfg["program"], "pitch_range": [cfg["low"], cfg["high"]]})
+    return {"palette": pal, "instruments": rows, "by_dataset": {r["dataset_id"]: r["instrument"] for r in rows}}
+
+
+class SonifyPoint(BaseModel):
+    lat: float = Field(ge=-90, le=90, validation_alias=AliasChoices("lat", "latitude"))
+    lng: float = Field(ge=-180, le=360, validation_alias=AliasChoices("lng", "lon", "longitude"))
+    x: Optional[float] = Field(None, description="position on the frontend's array; not needed, lat/lng are used")
+    y: Optional[float] = None
+
+
+class SonifyRequest(BaseModel):
+    zone_id: Optional[str] = Field(None, description="the frontend's id of the area; echoed back. Without points it "
+                                                     "must be a preset zone of GET /api/options")
+    zone_name: Optional[str] = None
+    dataset_id: Optional[str | list[str]] = Field(None, description="which variable to hear: 'temperature', 'precipitation', "
+                                                  "'co2', 'dust', 'smoke', 'lightning' (or a list); 'all' or nothing = the whole orchestra")
+    points: Optional[list[SonifyPoint]] = Field(None, description="the selected points: [{lat, lng, x, y}, ...]")
+    time_period: Optional[str | int] = Field(None, description="where to start: '2024-03', '2024' (default: the first date)")
+    aggregation: Literal["mean"] = Field("mean", description="how the points are combined; only the area-weighted mean exists")
+    duration_s: float = Field(30, gt=0, le=600, description="seconds of music per chunk")
+    audio_format: Literal["mp3", "wav"] = "mp3"
+    embed_audio: bool = Field(True, description="false: no base64 in the answer, use audio_url instead")
+    options: Optional[dict] = Field(None, description="any other field of POST /api/compose (style, bpm, key, dataset, ...)")
+
+
+@app.post("/api/sonify")
+def sonify(req: SonifyRequest, request: Request):
+    opts = dict(req.options or {})
+    ds = scan_datasets()
+    ds_id = opts.get("dataset") or default_dataset()
+    if not ds_id or ds_id not in ds:
+        raise HTTPException(404, f"dataset '{ds_id}' not found; see GET /api/datasets")
+    group = ds[ds_id]
+    # which instruments
+    wanted = req.dataset_id if isinstance(req.dataset_id, list) else ([req.dataset_id] if req.dataset_id else [])
+    variables = []
+    for d in wanted:
+        k = VARIABLE_ALIASES.get(d.strip().lower(), d.strip().lower())
+        if k in ("all", "orchestra"):
+            variables = []
+            break
+        if k not in group["variables"]:
+            raise HTTPException(400, f"unknown dataset_id '{d}'; available: {sorted(group['variables'])} "
+                                     f"(also: {sorted(VARIABLE_ALIASES)}, all)")
+        variables.append(k)
+    # which area
+    if req.points:
+        gh, gw = POINT_GRID
+        cells = sorted({(min(int((90 - p.lat) * gh / 180), gh - 1), min(int(((p.lng + 180) % 360) * gw / 360), gw - 1))
+                        for p in req.points})
+        area = {"cells": [list(c) for c in cells], "cells_grid": list(POINT_GRID)}
+    elif (req.zone_id or "").lower() in ZONES:
+        area = {"zone": req.zone_id.lower()}
+    else:
+        raise HTTPException(422, "send points, or a zone_id that is a preset zone (GET /api/options)")
+    body = {**opts, **area, "variables": variables or None, "duration_s": req.duration_s, "audio": True,
+            "audio_format": req.audio_format, "include_notes": False}
+    if req.time_period is not None:
+        body["start"] = str(req.time_period)
+    try:
+        creq = ComposeRequest(**body)
+    except ValidationError as e:
+        raise HTTPException(422, [{"loc": list(x["loc"]), "msg": x["msg"]} for x in e.errors()])
+    out = compose(creq, request)
+    score, folder = out["score"], CACHE_DIR / out["id"]
+    audio = next((folder / f"score.{e}" for e in ("mp3", "wav") if (folder / f"score.{e}").exists()), None)
+    if audio is None:
+        raise HTTPException(503, "audio rendering is not available on the server (see GET /api/health)")
+    # the period right after this chunk, in the same form as time_period ('2024-03', or a day for daily data)
+    times = group.get("times") or []
+    n = 7 if len({t[:7] for t in times}) == len(times) else 10
+    end_time = score.get("time_last_frame") or score["time_end"]       # the last frame played, not the start of the last bar
+    last = times.index(end_time) if end_time in times else None
+    nxt = times[last + 1][:n] if last is not None and last + 1 < len(times) else None
+    first = {v: (i["values_per_beat"][0] if i.get("values_per_beat") else None, i.get("units"))
+             for v, i in score["instruments"].items() if v != "anomaly_markers"}
+    main = variables[0] if variables else next(iter(first), None)
+    return {"zone_id": req.zone_id, "zone_name": req.zone_name, "dataset_id": req.dataset_id,
+            "time_period": score["time_start"][:n] if score["time_start"] else None,
+            "next_time_period": nxt,
+            "audio_data": base64.b64encode(audio.read_bytes()).decode("ascii") if req.embed_audio else None,
+            "audio_format": audio.suffix[1:], "audio_url": out["files"]["audio"],
+            "value": first[main][0] if main else None, "units": first[main][1] if main else None,
+            "values": {v: x[0] for v, x in first.items()},
+            "point_count": len(req.points or []), "cell_count": score.get("cells"),
+            "aggregation": req.aggregation, "time_end": end_time[:n] if end_time else None,
+            "duration_s": score["duration_s"], "composition_id": out["id"], "cached": out["cached"]}
 
 
 @app.get("/api/compositions/{comp_id}")

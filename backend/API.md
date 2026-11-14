@@ -25,10 +25,80 @@ uvicorn backend.app:app --reload --port 8000
 |---|---|---|
 | GET | `/api/health` | status, number of datasets, whether audio/MP3 rendering is available |
 | GET | `/api/options` | everything the UI needs for its menus: zones (with bbox), palettes, keys, scales, the orchestra (which instrument plays which variable), default request |
+| GET | `/api/instruments` | **which instrument plays which dataset**: one row per dataset with `dataset_id` (what `/api/sonify` accepts), `label`, `instrument`, `role`, `units`, `always_playing`, plus `by_dataset`, a plain `{dataset_id: instrument}` map. `?palette=auto&zone=japan` gives the regional instruments |
 | GET | `/api/datasets` | available datasets: id, variables (units, range, instrument), number of frames, time range |
-| **POST** | **`/api/compose`** | **compose a piece** (see below) |
+| **POST** | **`/api/sonify`** | **the frontend's own format**: selected points + one time period in, 30 s of audio inside the JSON out (see the next section) |
+| **POST** | **`/api/compose`** | **compose a piece**, with every option and the full score (see below) |
 | GET | `/api/compositions/{id}` | fetch an earlier composition again (`?include_notes=false` for a light payload) |
 | GET | `/api/files/{id}/{file}` | download a generated file (MIDI, MP3/WAV, JSON, PNG); the compose response gives you the full URLs |
+
+## GET `/api/instruments` (dataset ↔ instrument)
+```json
+{
+  "palette": "orchestra",
+  "by_dataset": {
+    "temperature": "Piano (chords)", "co2": "Contrabass", "precipitation": "Violins (melody)",
+    "dust": "Flute (melody)", "smoke": "French Horns (melody)", "lightning": "Xylophone"
+  },
+  "instruments": [
+    {"dataset_id": "temperature", "variable": "surface_temperature", "label": "Temperature",
+     "instrument": "Piano (chords)", "role": "harmony", "always_playing": true,
+     "units": "degC", "available": true, "real_data": false,
+     "also_accepted": ["surface_temperature", "temp"], "midi_program": 0, "pitch_range": [48, 72]}
+  ]
+}
+```
+`always_playing: false` means the instrument is heard only while its phenomenon is present in the area (rain, dust, smoke, lightning). `available` says whether the server's default dataset has that variable, and `real_data` whether it is observed rather than modelled. The table is read from the orchestration in `music/orchestra.py`, so it follows any change made there.
+
+## POST `/api/sonify` (points + one date → a chunk of audio)
+The frontend sends the selected points and one time period. The backend answers with 30 seconds of music starting at that period, and with the period to ask for next.
+```json
+{
+  "zone_id": "france",
+  "zone_name": "France",
+  "dataset_id": "temperature",
+  "points": [
+    {"lat": 48.8566, "lng": 2.3522, "x": 512, "y": 234},
+    {"lat": 48.1173, "lng": -1.6778, "x": 508, "y": 236}
+  ],
+  "time_period": "2024-03",
+  "aggregation": "mean"
+}
+```
+| field | notes |
+|---|---|
+| `points` | the selected points. **`lat` and `lng` are what the backend uses** (`lon` also works); `x`, `y` are accepted and ignored, so the frontend's array can have any resolution. Every data cell that contains at least one point is averaged |
+| `zone_id`, `zone_name` | the frontend's own labels, echoed back. Without `points`, `zone_id` must be a preset zone of `/api/options` |
+| `dataset_id` | which variable to hear: `temperature`, `precipitation` (`rain`), `co2`, `dust`, `smoke`, `lightning`, or the names of `/api/datasets`. A list plays several together. `all`, or leaving it out, plays the whole orchestra |
+| `time_period` | where to start: `"2024-03"`, `"2024-3"` or `"2024"`. Left out = the first date of the data |
+| `aggregation` | only `"mean"` (area-weighted); anything else is a `422` |
+| `duration_s` | optional, default `30` |
+| `audio_format` | optional, `mp3` (default) or `wav` |
+| `embed_audio` | optional; `false` leaves `audio_data` empty, for use with `audio_url` (smaller answer) |
+| `options` | optional object with any field of `/api/compose` below, e.g. `{"style": "musical", "bpm": 96}` |
+
+```json
+{
+  "zone_id": "france", "zone_name": "France", "dataset_id": "temperature",
+  "time_period": "2024-03",
+  "next_time_period": "2025-01",
+  "audio_data": "<base64 of the MP3 or WAV file>",
+  "audio_format": "mp3",
+  "audio_url": "http://localhost:8000/api/files/3f0c…/score.mp3",
+  "value": 9.42, "units": "degC",
+  "values": {"surface_temperature": 9.42},
+  "point_count": 2, "cell_count": 2,
+  "aggregation": "mean",
+  "time_end": "2024-12", "duration_s": 30.0,
+  "composition_id": "3f0c…", "cached": false
+}
+```
+- **`time_period`** is the date the music really starts at. It differs from the request when the requested date is before the data begins.
+- **`next_time_period`** is the period right after this chunk: send it as the next `time_period` to continue. It is `null` at the end of the data.
+- **`audio_data`** in the browser: `new Audio("data:audio/mpeg;base64," + audio_data)` (`audio/wav` for WAV), or simply `new Audio(audio_url)`.
+- **`value`** is the mean of the first variable over the selected cells at `time_period`, in `units`; `values` has it for every variable played.
+- **`point_count`** is the number of points received; `cell_count` is the number of data cells they cover.
+- For the notes, bars and per-beat values of the same piece: `GET /api/compositions/{composition_id}`.
 
 ## POST `/api/compose`
 All fields are optional. The smallest request is `{}` (global zone, default dataset).
@@ -56,7 +126,9 @@ All fields are optional. The smallest request is `{}` (global zone, default data
 | `cells_grid` | `[rows, cols]` | shape of the array the positions refer to. Leave it out when that is the dataset's own grid (`variables[v].grid` in `/api/datasets`, e.g. `[180, 360]`). Send it when your array has another resolution (e.g. `[720, 1440]`): the selection is rescaled onto the data |
 | `bbox` | `[lat_min, lat_max, lon_min, lon_max]` | older way to send a custom area, as a lat/lon box; still accepted. Overrides `zone`. `lon_min > lon_max` = crosses the dateline |
 | `surface` | `all` / `land` / `ocean` | which cells of the zone to average |
-| `start`, `end` | ISO date prefix (`"2024-06"`) or frame index | time window; one frame = one bar |
+| `start`, `end` | date as text (`"2024-06"`, `"2024-6"`, `"2024"`) or frame index (a number) | time window, both ends included; one frame = one bar. A year alone must be text: the number `2024` means frame 2024 |
+| `year`, `month` | numbers (`2024`, `3`) | the start date as numbers instead of `start`. `month` is optional (1–12) |
+| `duration_s` | seconds (e.g. `30`) | **one date + a length**: play this many seconds of data from the start date, instead of sending `end`. As many bars as fit at about `bpm` are taken, then the tempo is nudged so they last exactly `duration_s` (30 s at the default tempo = 10 bars at 80 bpm) |
 | `variables` | list | subset of instruments, e.g. `["surface_temperature","co2"]` |
 | `palette` | string | `orchestra` (default), `auto` (regional instruments for the zone, fun mode), or a palette id |
 | `key`, `scale`, `bpm` | | musical options; `scale` default = major (or the palette's mode) |
@@ -201,6 +273,15 @@ All fields are optional. The smallest request is `{}` (global zone, default data
 
 ```
 
+### New in v1.6 (the frontend's format, one date + a length)
+- new `POST /api/sonify` (points + one `time_period` → 30 s of audio inside the JSON, with `next_time_period`) and `GET /api/instruments` (dataset ↔ instrument); see their sections above.
+- `/api/compose`: `{"cells": [...], "year": 2024, "month": 3, "duration_s": 30}` plays 30 seconds starting in March 2024. Read `score.time_start`, `score.time_end`, `score.n_bars`, `score.bpm` and `score.duration_s` to know what was actually played.
+- `duration_s` counts bars, so it follows `frames_per_bar`: 30 s is 10 bars, which is 10 months of monthly data or 10 weeks of daily data. With daily data `/api/sonify` answers with days (`"time_period": "2024-01-01"`, `"next_time_period": "2024-03-11"`).
+- `score.time_last_frame`: the date of the last frame played. `score.time_end` is the start of the last bar, which is up to 6 days earlier with weekly bars.
+- `duration_s` is exact in the default `data` style. The rendered audio file is about 1.7 s longer, because the hall reverb rings out after the last note. In `musical` style the intro and the outro come on top (send `"intro": false` to drop the intro).
+- a start date before the data begins at the first frame; a start date after the data is a `400`. Close to the end of the data, where fewer frames are left, the piece is shorter (same tempo).
+- with both `end` and `duration_s`, the piece stops at whichever comes first.
+
 ### New in v1.5 (real daily data, snowfall)
 - **Default dataset = the one with the most real variables**: `real_daily_2024` (the extraction team's real daily precipitation and snowfall + real temperature and CO₂). `GET /api/datasets` lists it with 366 frames, and `start`/`end` accept days (`"2024-10-01"`).
 - new instrument `snowfall` → **glockenspiel** (melody while it snows).
@@ -237,7 +318,7 @@ curl -X POST localhost:8000/api/compose -H 'Content-Type: application/json' \
 curl -X POST localhost:8000/api/compose -H 'Content-Type: application/json' \
      -d '{"cells":[[42,186],[42,187],[43,186],[43,187],[43,188]],"start":"2024-06","end":"2024-12","audio":false}'
 curl -X POST localhost:8000/api/compose -H 'Content-Type: application/json' \
-     -d '{"cells":[[170,744],[170,745],[171,744]],"cells_grid":[720,1440]}'
+     -d '{"cells":[[170,744],[170,745],[171,744]],"cells_grid":[720,1440],"year":2024,"month":3,"duration_s":30}'
 curl -X POST localhost:8000/api/compose -H 'Content-Type: application/json' \
      -d '{"zone":"japan","palette":"auto","include_notes":false}'
 ```

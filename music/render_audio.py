@@ -16,6 +16,9 @@ Usage
 from __future__ import annotations
 
 import argparse
+import os
+import shutil
+import stat
 import subprocess
 import wave
 from pathlib import Path
@@ -42,9 +45,18 @@ def ensure_soundfont(path: Path) -> Path:
     (tmp / "GeneralUser-GS.sf2").rename(DEFAULT_SF2)
     lic = tmp / "documentation" / "LICENSE.txt"
     if lic.exists():
-        lic.rename(SF_DIR / "GeneralUser-GS_LICENSE.txt")
-    subprocess.run(["rm", "-rf", str(tmp)])
+        lic.replace(SF_DIR / "GeneralUser-GS_LICENSE.txt")      # replace: rename fails on Windows if it exists
+    _rmtree(tmp)                                                 # no "rm" on Windows
     return DEFAULT_SF2
+
+
+def _rmtree(folder: Path):
+    """Delete a folder, including the read-only files git leaves on Windows."""
+    def force(func, path, _exc):
+        os.chmod(path, stat.S_IWRITE)
+        func(path)
+    kw = {"onexc": force} if _sys.version_info >= (3, 12) else {"onerror": force}
+    shutil.rmtree(folder, **kw)
 
 
 def hall_ir(sr: int, seconds=2.4, predelay=0.02, seed=1):

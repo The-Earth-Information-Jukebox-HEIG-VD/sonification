@@ -118,6 +118,100 @@ def test_compose_cells_instead_of_bbox():
     assert s["cells"] == 1 and s["bbox"] == [46.5, 46.5, 7.5, 7.5]
 
 
+def test_single_date_and_duration():
+    ds = {d["id"]: d for d in client.get("/api/datasets").json()["datasets"]}
+    if "sim_both_24f_1deg" not in ds:
+        print("skip: no simulated dataset (python simulation/simulate_variables.py ...)"); return
+    base = {"dataset": "sim_both_24f_1deg", "zone": "europe", "audio": False, "variables": ["surface_temperature"]}
+    # one date as numbers + a length in seconds: 30 s from March 2024
+    r = client.post("/api/compose", json={**base, "year": 2024, "month": 3, "duration_s": 30})
+    assert r.status_code == 200, r.text
+    s = r.json()["score"]
+    assert s["time_start"].startswith("2024-03") and s["time_end"].startswith("2024-12")
+    assert s["n_bars"] == 10 and s["bpm"] == 80 and abs(s["duration_s"] - 30) < 0.05
+    assert r.json()["request"]["start"] == "2024-03"
+    # the same date as text, with or without the leading zero, is the same piece
+    for start in ("2024-03", "2024-3"):
+        again = client.post("/api/compose", json={**base, "start": start, "duration_s": 30}).json()
+        assert again["cached"] and again["id"] == r.json()["id"]
+    # a year alone, as text, is a date (a number is a frame index)
+    s = client.post("/api/compose", json={**base, "start": "2024", "end": "2024"}).json()["score"]
+    assert s["n_bars"] == 12 and s["time_start"].startswith("2024-01") and s["time_end"].startswith("2024-12")
+    s = client.post("/api/compose", json={**base, "year": 2025, "duration_s": 15}).json()["score"]
+    assert s["time_start"].startswith("2025-01") and s["n_bars"] == 5 and abs(s["duration_s"] - 15) < 0.05
+    # the length counts bars: with 2 frames per bar, the same 30 s covers twice as many months
+    s = client.post("/api/compose", json={**base, "year": 2024, "month": 3, "duration_s": 30, "frames_per_bar": 2}).json()["score"]
+    assert s["n_bars"] == 10 and s["time_last_frame"].startswith("2025-10") and abs(s["duration_s"] - 30) < 0.05
+    assert s["time_end"].startswith("2025-09")                              # time_end = start of the last bar
+    # an end date still stops the piece earlier
+    s = client.post("/api/compose", json={**base, "start": "2024-03", "end": "2024-05", "duration_s": 30}).json()["score"]
+    assert s["n_bars"] == 3
+    # close to the end of the data there are fewer months left: the piece is shorter, the tempo is the same
+    s = client.post("/api/compose", json={**base, "year": 2025, "month": 10, "duration_s": 30}).json()["score"]
+    assert s["n_bars"] == 3 and s["bpm"] == 80 and abs(s["duration_s"] - 9) < 0.05
+    assert client.post("/api/compose", json={**base, "month": 3}).status_code == 422                       # month needs year
+    assert client.post("/api/compose", json={**base, "year": 2024, "start": "2024-03"}).status_code == 422
+    assert client.post("/api/compose", json={**base, "year": 2024, "duration_s": 0}).status_code == 422
+    assert client.post("/api/compose", json={**base, "year": 2090, "duration_s": 30}).status_code == 400   # after the data
+    # a date before the data starts at the first frame (score.time_start says where)
+    s = client.post("/api/compose", json={**base, "year": 1990, "duration_s": 30}).json()["score"]
+    assert s["time_start"].startswith("2024-01") and s["n_bars"] == 10
+
+
+def test_instruments_table():
+    j = client.get("/api/instruments").json()
+    assert j["palette"] == "orchestra" and len(j["instruments"]) == len(j["by_dataset"]) >= 6
+    assert {"temperature", "co2", "precipitation", "dust", "smoke", "lightning"} <= set(j["by_dataset"])
+    t = next(r for r in j["instruments"] if r["dataset_id"] == "temperature")
+    assert t["variable"] == "surface_temperature" and t["label"] == "Temperature" and t["instrument"] == j["by_dataset"]["temperature"]
+    assert t["always_playing"] and t["available"] and t["units"] == "degC" and "temp" in t["also_accepted"]
+    # every dataset_id of the table is accepted by /api/sonify
+    for r in j["instruments"]:
+        if not r["available"]:                                   # e.g. snowfall is only in the daily dataset
+            continue
+        ok = client.post("/api/sonify", json={"zone_id": "europe", "dataset_id": r["dataset_id"], "embed_audio": False,
+                                              "duration_s": 6})
+        assert ok.status_code == 200 and list(ok.json()["values"]) == [r["variable"]], ok.text
+    # regional instruments
+    jp = client.get("/api/instruments?palette=auto&zone=japan").json()
+    assert jp["palette"] == "japan" and jp["by_dataset"] != j["by_dataset"]
+    assert client.get("/api/instruments?palette=nope").status_code == 400
+
+
+def test_sonify_frontend_contract():
+    """The frontend's own request/response shape: points + one time period -> audio inside the JSON."""
+    import base64
+    body = {"zone_id": "france", "zone_name": "France", "dataset_id": "temperature",
+            "points": [{"lat": 48.8566, "lng": 2.3522, "x": 512, "y": 234},
+                       {"lat": 48.1173, "lng": -1.6778, "x": 508, "y": 236},
+                       {"lat": 43.2965, "lng": 5.3698, "x": 520, "y": 248}],
+            "time_period": "2024-03", "aggregation": "mean"}
+    r = client.post("/api/sonify", json=body)
+    assert r.status_code == 200, r.text
+    j = r.json()
+    assert j["zone_id"] == "france" and j["dataset_id"] == "temperature" and j["point_count"] == 3
+    assert j["time_period"] == "2024-03" and j["next_time_period"] == "2025-01"      # 30 s = 10 monthly bars
+    assert isinstance(j["value"], float) and j["units"] == "degC" and list(j["values"]) == ["surface_temperature"]
+    assert abs(j["duration_s"] - 30) < 0.05 and j["cell_count"] >= 1
+    audio = base64.b64decode(j["audio_data"])
+    assert len(audio) > 10000 and (audio[:4] == b"RIFF" if j["audio_format"] == "wav" else audio[:3] in (b"ID3", b"\xff\xfb\x90")
+                                   or audio[0] == 0xFF)
+    assert client.get(j["audio_url"]).content == audio
+    # the frontend plays the chunk, then asks for the next one
+    j2 = client.post("/api/sonify", json={**body, "time_period": j["next_time_period"], "embed_audio": False}).json()
+    assert j2["time_period"] == "2025-01" and j2["audio_data"] is None and j2["audio_url"]
+    # no dataset_id = the whole orchestra; lon is accepted for lng; a preset zone needs no points
+    j3 = client.post("/api/sonify", json={"zone_id": "india", "time_period": "2024-03", "embed_audio": False,
+                                          "options": {"bpm": 96}}).json()
+    assert len(j3["values"]) > 1 and j3["point_count"] == 0 and j3["cell_count"] is None
+    pts = [{"lat": 46.5, "lon": 6.6}]
+    assert client.post("/api/sonify", json={"points": pts, "dataset_id": ["co2", "rain"], "embed_audio": False}).status_code == 200
+    assert client.post("/api/sonify", json={"points": pts, "aggregation": "max"}).status_code == 422
+    assert client.post("/api/sonify", json={"zone_id": "atlantis"}).status_code == 422
+    assert client.post("/api/sonify", json={"points": pts, "dataset_id": "unicorns"}).status_code == 400
+    assert client.post("/api/sonify", json={"points": [{"lat": 99, "lng": 0}]}).status_code == 422
+
+
 def test_real_dataset_tension_and_form():
     ds = client.get("/api/datasets").json()
     real = [d for d in ds["datasets"] if d["id"].startswith("real_2015")]
