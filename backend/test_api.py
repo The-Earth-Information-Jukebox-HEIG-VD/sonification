@@ -64,6 +64,57 @@ def test_compose_bbox_time_window_no_audio():
     assert r.json()["files"]["audio"] is None
 
 
+def _cells_in_box(grid, box):
+    """[row, col] of every cell whose centre is inside [lat_min, lat_max, lon_min, lon_max]."""
+    h, w = grid
+    la0, la1, lo0, lo1 = box
+    return [[r, c] for r in range(h) for c in range(w)
+            if la0 <= 90 - (r + 0.5) * 180 / h <= la1 and lo0 <= -180 + (c + 0.5) * 360 / w <= lo1]
+
+
+def test_compose_cells_instead_of_bbox():
+    import numpy as np
+    ds = {d["id"]: d for d in client.get("/api/datasets").json()["datasets"]}
+    if "sim_both_24f_1deg" not in ds:
+        print("skip: no simulated dataset (python simulation/simulate_variables.py ...)"); return
+    grid = ds["sim_both_24f_1deg"]["variables"]["surface_temperature"]["grid"]
+    base = {"dataset": "sim_both_24f_1deg", "start": "2024-06", "end": "2024-12", "audio": False,
+            "variables": ["surface_temperature", "co2"]}
+    box = [35, 71, -25, 45]                                                  # Europe
+
+    def values(score):
+        return np.array([np.nan if v is None else v
+                         for v in score["instruments"]["surface_temperature"]["values_per_beat"]])
+
+    ref = client.post("/api/compose", json={**base, "bbox": box}).json()["score"]
+    cells = _cells_in_box(grid, box)
+    r = client.post("/api/compose", json={**base, "cells": cells})
+    assert r.status_code == 200, r.text
+    s = r.json()["score"]
+    assert s["zone"] == "custom" and s["cells"] == len(cells) and s["n_bars"] == 7
+    assert np.allclose(values(s), values(ref), equal_nan=True)               # same cells -> same music
+    assert s["bbox"] == [35.5, 70.5, -24.5, 44.5]                            # box around the cells (cell centres)
+    assert r.json()["request"]["n_cells"] == len(cells) and "cells" not in r.json()["request"]
+    # the same cells in another order are the same piece (cache hit)
+    again = client.post("/api/compose", json={**base, "cells": cells[::-1]}).json()
+    assert again["cached"] and again["id"] == r.json()["id"]
+    # cells win over zone and bbox
+    s = client.post("/api/compose", json={**base, "zone": "india", "bbox": [0, 10, 0, 10], "cells": cells}).json()["score"]
+    assert np.allclose(values(s), values(ref), equal_nan=True)
+    # any shape of area: half of the cells is a different piece
+    half = client.post("/api/compose", json={**base, "cells": [c for c in cells if c[1] < 180]}).json()["score"]
+    assert not np.allclose(values(half), values(ref), equal_nan=True)
+    # positions picked on an array twice as fine, and on one ten times coarser, land on the same area
+    fine = [[2 * a + i, 2 * b + j] for a, b in cells for i in (0, 1) for j in (0, 1)]
+    s = client.post("/api/compose", json={**base, "cells": fine, "cells_grid": [2 * grid[0], 2 * grid[1]]}).json()["score"]
+    assert s["cells"] == len(cells) and np.allclose(values(s), values(ref), equal_nan=True)
+    s = client.post("/api/compose", json={**base, "cells": [[4, 18]], "cells_grid": [18, 36]}).json()["score"]
+    assert s["cells"] == 100 and s["bbox"] == [40.5, 49.5, 0.5, 9.5]         # one 10-degree cell = 100 one-degree cells
+    # a single small position on a fine array still selects the cell it falls in
+    s = client.post("/api/compose", json={**base, "cells": [[172, 748]], "cells_grid": [720, 1440]}).json()["score"]
+    assert s["cells"] == 1 and s["bbox"] == [46.5, 46.5, 7.5, 7.5]
+
+
 def test_real_dataset_tension_and_form():
     ds = client.get("/api/datasets").json()
     real = [d for d in ds["datasets"] if not d["simulated"]]
@@ -120,6 +171,11 @@ def test_regional_palette():
 def test_errors():
     assert client.post("/api/compose", json={"zone": "atlantis"}).status_code == 422
     assert client.post("/api/compose", json={"bbox": [50, 40, 0, 10]}).status_code == 422
+    assert client.post("/api/compose", json={"cells": []}).status_code == 422
+    assert client.post("/api/compose", json={"cells": [[1]]}).status_code == 422
+    assert client.post("/api/compose", json={"cells": [[-1, 2]]}).status_code == 422
+    assert client.post("/api/compose", json={"cells": [[5, 5]], "cells_grid": [4, 4]}).status_code == 422
+    assert client.post("/api/compose", json={"cells": [[99999, 0]], "audio": False}).status_code == 400   # outside the array
     assert client.post("/api/compose", json={"dataset": "nope"}).status_code == 404
     assert client.post("/api/compose", json={"zone": "india", "variables": ["unicorns"]}).status_code == 400
     assert client.post("/api/compose", json={"zone": "india", "start": "1990", "end": "1991"}).status_code == 400

@@ -44,6 +44,7 @@ python simulation/simulate_variables.py --scenario both --warming 0.5 --years 2 
 python music/orchestra.py simulation/output/sim_both_24f_1deg_ --zone india --preview
 python music/orchestra.py simulation/output/sim_both_24f_1deg_ --zone sahara --key A --scale minor
 python music/orchestra.py simulation/output/sim_both_24f_1deg_ --zone arctic --only surface_temperature,co2
+python music/orchestra.py simulation/output/sim_both_24f_1deg_ --cells positions.npy   # any-shape area: (N, 2) int array of [row, col] on the data array (--cells-grid rows,cols if picked on another grid)
 ```
 
 ## 0. Two styles: `data` (default) and `musical`

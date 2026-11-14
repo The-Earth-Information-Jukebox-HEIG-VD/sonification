@@ -1,6 +1,6 @@
 # Sonification API: contract for the frontend
 
-Backend for the Earth Information Jukebox. The frontend sends **what to listen to** (dataset, zone, time window, a few musical options). The backend composes the orchestra and returns **the score as JSON plus URLs** to the MIDI, the per-instrument stems and the rendered audio.
+Backend for the Earth Information Jukebox. The frontend sends **what to listen to** (dataset, zone or selected cells, time window, a few musical options). The backend composes the orchestra and returns **the score as JSON plus URLs** to the MIDI, the per-instrument stems and the rendered audio.
 
 - Base URL (dev): `http://localhost:8000`
 - Interactive docs (try every call in the browser): **`http://localhost:8000/docs`**
@@ -36,6 +36,7 @@ All fields are optional. The smallest request is `{}` (global zone, default data
 {
   "dataset": "sim_both_24f_1deg",
   "zone": "switzerland",
+  "cells": null, "cells_grid": null,
   "bbox": null,
   "surface": "all",
   "start": "2024-06", "end": "2025-03",
@@ -51,7 +52,9 @@ All fields are optional. The smallest request is `{}` (global zone, default data
 |---|---|---|
 | `dataset` | string | id from `/api/datasets`; default = the real data if present, otherwise the simulation |
 | `zone` | string | preset id from `/api/options` (`switzerland`, `india`, `europe`, `global`…) |
-| `bbox` | `[lat_min, lat_max, lon_min, lon_max]` | **custom area drawn on the map**; overrides `zone`. `lon_min > lon_max` = crosses the dateline |
+| `cells` | `[[row, col], ...]` | **custom area selected on the map, any shape**: the positions of the selected cells on the data array. Row 0 is the top of the array (north), column 0 is the left edge (180°W). Overrides `zone` and `bbox`. Order and duplicates do not matter |
+| `cells_grid` | `[rows, cols]` | shape of the array the positions refer to. Leave it out when that is the dataset's own grid (`variables[v].grid` in `/api/datasets`, e.g. `[180, 360]`). Send it when your array has another resolution (e.g. `[720, 1440]`): the selection is rescaled onto the data |
+| `bbox` | `[lat_min, lat_max, lon_min, lon_max]` | older way to send a custom area, as a lat/lon box; still accepted. Overrides `zone`. `lon_min > lon_max` = crosses the dateline |
 | `surface` | `all` / `land` / `ocean` | which cells of the zone to average |
 | `start`, `end` | ISO date prefix (`"2024-06"`) or frame index | time window; one frame = one bar |
 | `variables` | list | subset of instruments, e.g. `["surface_temperature","co2"]` |
@@ -71,7 +74,7 @@ All fields are optional. The smallest request is `{}` (global zone, default data
 
 **Timing:** first request ≈ 2–3 s with MP3, ≈ 0.5 s without audio. **The same request again is served from cache in about 10 ms** (the `id` is a hash of the request and the data).
 
-**Errors:** `422` invalid input (unknown zone, bad bbox…), `404` unknown dataset, `400` nothing to play (e.g. a time window with no data, unknown variable). The body always has a `detail` message you can show.
+**Errors:** `422` invalid input (unknown zone, bad bbox, malformed `cells`…), `404` unknown dataset, `400` nothing to play (e.g. a time window with no data, unknown variable, positions outside the array). The body always has a `detail` message you can show.
 
 ### Response
 ```json
@@ -197,6 +200,11 @@ All fields are optional. The smallest request is `{}` (global zone, default data
 
 ```
 
+### New in v1.4 (area as array positions)
+- request: `cells` (+ optional `cells_grid`) replaces `bbox` for custom areas, so the area can have any shape. Positions are `[row, col]` indices into the 2-D data array, the same indices you would use on the NumPy array (`array[row, col]`).
+- response: `score.zone` is `"custom"`, `score.cells` is the number of data cells that were averaged, and `score.bbox` is the lat/lon box around them (cell centres), handy for zooming the map.
+- the echoed `request` does not repeat the positions; it has `n_cells` (how many were sent).
+
 ### New in v1.2
 - `style` (default **`data`**): in data style `bars[i].chord` and `mode` are `null`, `sections` is just `[data]`, `intro_bars` = 0, and there's an extra instrument `anomaly_markers` (GM drums: 81 = triangle = hot, 77 = woodblock = cold). `bars[i].tension` is still reported (from the anomalies) in both styles, which is handy for the visuals.
 - each instrument: `pitch_range` (lowest and highest note used), so the UI can draw a pitch ↔ value legend from `values_per_beat`.
@@ -221,7 +229,9 @@ All fields are optional. The smallest request is `{}` (global zone, default data
 curl -X POST localhost:8000/api/compose -H 'Content-Type: application/json' \
      -d '{"zone":"india"}'
 curl -X POST localhost:8000/api/compose -H 'Content-Type: application/json' \
-     -d '{"bbox":[45.8,47.8,5.9,10.5],"start":"2024-06","end":"2024-12","audio":false}'
+     -d '{"cells":[[42,186],[42,187],[43,186],[43,187],[43,188]],"start":"2024-06","end":"2024-12","audio":false}'
+curl -X POST localhost:8000/api/compose -H 'Content-Type: application/json' \
+     -d '{"cells":[[170,744],[170,745],[171,744]],"cells_grid":[720,1440]}'
 curl -X POST localhost:8000/api/compose -H 'Content-Type: application/json' \
      -d '{"zone":"japan","palette":"auto","include_notes":false}'
 ```

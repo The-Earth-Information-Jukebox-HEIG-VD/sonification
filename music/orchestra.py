@@ -43,7 +43,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from midi_writer import MidiFile  # noqa: E402
 from zone_to_midi import (ZONES, SCALES, load_map, note_name, parse_key,  # noqa: E402
-                          scale_notes, zone_mask, zone_series)
+                          scale_notes, zone_mask, cells_mask, zone_series)
 import composition as comp  # noqa: E402
 
 SEVEN_NOTE_SCALES = [k for k, v in SCALES.items() if len(v) == 7]
@@ -823,9 +823,13 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
             only=None, exclude=None, seed=7, out_dir=None, name=None,
             preview=False, render=False, reverb=0.28, audio_format="wav", verbose=False,
             intro=True, tension=True, climax=True, humanize=0.5,
-            style="data", quantize="scale", markers=True, marker_threshold=1.5, audio_engine="auto"):
+            style="data", quantize="scale", markers=True, marker_threshold=1.5, audio_engine="auto",
+            cells=None, cells_grid=None):
     """Data maps -> score. Writes MIDI (+ stems, JSON, optional PNG/audio) to out_dir and returns
-    a dict with the score document, file paths and stats."""
+    a dict with the score document, file paths and stats.
+
+    The area is a preset `zone`, a lat/lon `bbox`, or `cells`: a list of [row, col] positions on
+    the data array (any shape of area). `cells` wins over `bbox`, which wins over `zone`."""
     log = print if verbose else (lambda *a, **k: None)
     if style not in ("data", "musical"):
         raise ComposeError("style must be 'data' or 'musical'")
@@ -834,17 +838,22 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
     musical = style == "musical"
     if not musical:      # data-faithful: nothing that isn't in the data
         intro, climax, humanize, add_ending = False, False, None, False
-    pal_name = resolve_palette(palette, zone, bbox)
+    use_cells = cells is not None
+    pal_name = resolve_palette(palette, zone, use_cells or bbox)
     orch = apply_palette(pal_name)
     scale = scale or PALETTE_SCALE.get(pal_name, "major")
     if scale not in SEVEN_NOTE_SCALES:
         raise ComposeError(f"scale must be one of {SEVEN_NOTE_SCALES}")
-    if bbox is None and zone not in ZONES:
-        raise ComposeError(f"unknown zone '{zone}'")
-    bbox = tuple(float(x) for x in bbox) if bbox is not None else ZONES[zone]
-    if len(bbox) != 4 or not (-90 <= bbox[0] < bbox[1] <= 90) or not all(-180 <= x <= 180 for x in bbox[2:]):
-        raise ComposeError("bbox must be [lat_min, lat_max, lon_min, lon_max] with lat_min < lat_max")
-    zone_label = "custom" if zone is None or zone == "custom" or (zone not in ZONES) else zone
+    n_cells = None
+    if use_cells:
+        bbox, zone_label = None, "custom"     # bbox is reported below as the box around the cells
+    else:
+        if bbox is None and zone not in ZONES:
+            raise ComposeError(f"unknown zone '{zone}'")
+        bbox = tuple(float(x) for x in bbox) if bbox is not None else ZONES[zone]
+        if len(bbox) != 4 or not (-90 <= bbox[0] < bbox[1] <= 90) or not all(-180 <= x <= 180 for x in bbox[2:]):
+            raise ComposeError("bbox must be [lat_min, lat_max, lon_min, lon_max] with lat_min < lat_max")
+        zone_label = "custom" if zone is None or zone == "custom" or (zone not in ZONES) else zone
     only = set(only) if only else None
     excl = set(exclude or [])
     try:
@@ -864,7 +873,14 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
             continue
         land = z["land_fraction"] if "land_fraction" in z.files else None
         try:
-            mask = zone_mask(z["lat"], z["lon"], bbox, land, surface)
+            if use_cells:
+                mask = cells_mask((len(z["lat"]), len(z["lon"])), cells, land, surface, grid=cells_grid)
+                if bbox is None:
+                    la, lo = z["lat"][mask.any(axis=1)], z["lon"][mask.any(axis=0)]
+                    bbox = (float(la.min()), float(la.max()), float(lo.min()), float(lo.max()))
+                    n_cells = int(mask.sum())
+            else:
+                mask = zone_mask(z["lat"], z["lon"], bbox, land, surface)
         except ValueError as e:
             raise ComposeError(str(e))
         times = z["time"] if "time" in z.files else None
@@ -1076,7 +1092,7 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
                          "start_s": round(b2s(outro_start), 3)})
     doc = {
         "style": style, "quantize": quantize,
-        "zone": zone_label, "bbox": list(bbox), "surface": surface, "palette": pal_name,
+        "zone": zone_label, "bbox": list(bbox), "cells": n_cells, "surface": surface, "palette": pal_name,
         "key": key, "scale": scale, "bpm": bpm, "beats_per_bar": bpb,
         "n_bars": n_bars, "intro_bars": intro_bars, "total_beats": total_beats,
         "duration_s": round(b2s(total_beats), 2),
@@ -1155,6 +1171,9 @@ def main():
     ap.add_argument("maps", nargs="*", help=".npz files, a folder, or a prefix like output/sim_both_24f_1deg_")
     ap.add_argument("--zone", default="global")
     ap.add_argument("--bbox", help="lat_min,lat_max,lon_min,lon_max")
+    ap.add_argument("--cells", help=".npy file with an (N, 2) integer array of [row, col] positions on the data "
+                                    "array (overrides --zone and --bbox)")
+    ap.add_argument("--cells-grid", help="rows,cols of the array the positions refer to, if not the data grid")
     ap.add_argument("--surface", choices=["all", "land", "ocean"], default="all")
     ap.add_argument("--start", help="first frame: ISO date (e.g. 2024-06) or frame index")
     ap.add_argument("--end", help="last frame: ISO date or frame index")
@@ -1203,8 +1222,10 @@ def main():
     def num_or_str(x):
         return int(x) if x is not None and x.isdigit() else x
     try:
-        compose(a.maps, zone=None if a.bbox else a.zone,
+        compose(a.maps, zone=None if (a.bbox or a.cells) else a.zone,
                 bbox=[float(x) for x in a.bbox.split(",")] if a.bbox else None,
+                cells=np.load(a.cells, allow_pickle=False) if a.cells else None,
+                cells_grid=[int(x) for x in a.cells_grid.split(",")] if a.cells_grid else None,
                 surface=a.surface, start=num_or_str(a.start), end=num_or_str(a.end), loop=a.loop,
                 mapping=a.mapping, key=a.key, scale=a.scale, harmony=a.harmony, chord_bars=a.chord_bars,
                 bpm=a.bpm, beats_per_bar=a.beats_per_bar, frames_per_bar=a.frames_per_bar,

@@ -1,7 +1,7 @@
 """
 Earth Information Jukebox: sonification backend (FastAPI).
 
-The frontend picks a dataset, a zone (preset or lat/lon box), a time window and a few musical
+The frontend picks a dataset, a zone (preset, list of array positions, or lat/lon box), a time window and a few musical
 options; the backend composes the orchestra score and returns:
   * the score as JSON (bars, chords, instruments, notes, data values) for visualisation / playback
   * URLs to the MIDI file, per-instrument MIDI stems, and the rendered audio (MP3/WAV)
@@ -39,7 +39,7 @@ from zone_to_midi import ZONES  # noqa: E402
 DATA_DIR = Path(os.environ.get("JUKEBOX_DATA_DIR", ROOT / "simulation" / "output"))
 CACHE_DIR = Path(os.environ.get("JUKEBOX_CACHE_DIR", ROOT / "backend" / "cache"))
 CORS = [o.strip() for o in os.environ.get("JUKEBOX_CORS", "*").split(",")]
-API_VERSION = "1.3"
+API_VERSION = "1.4"
 
 app = FastAPI(title="Earth Information Jukebox: sonification API", version=API_VERSION,
               description="Turns NASA EIC intensity maps into an orchestra (MIDI + audio).")
@@ -106,6 +106,10 @@ class ComposeRequest(BaseModel):
     dataset: Optional[str] = Field(None, description="dataset id from GET /api/datasets (default: best available)")
     zone: Optional[str] = Field("global", description="preset zone name (GET /api/options); ignored if bbox given")
     bbox: Optional[list[float]] = Field(None, description="[lat_min, lat_max, lon_min, lon_max]; lon_min > lon_max crosses the dateline")
+    cells: Optional[list[list[int]]] = Field(None, description="custom area of any shape: positions [[row, col], ...] on the data "
+                                             "array (row 0 = north, col 0 = 180°W); overrides zone and bbox")
+    cells_grid: Optional[list[int]] = Field(None, description="[rows, cols] of the array the positions refer to, when it is not "
+                                            "the dataset grid (GET /api/datasets -> variables[v].grid); the selection is rescaled")
     surface: Literal["all", "land", "ocean"] = "all"
     start: Optional[str | int] = Field(None, description="first frame: ISO date prefix ('2024-06') or frame index")
     end: Optional[str | int] = Field(None, description="last frame: ISO date prefix or frame index")
@@ -144,16 +148,42 @@ class ComposeRequest(BaseModel):
                 raise ValueError("longitudes must be within -180..180")
         return v
 
+    @field_validator("cells")
+    @classmethod
+    def _cells(cls, v):
+        if v is not None:
+            if not v:
+                raise ValueError("cells is empty: send at least one [row, col] position")
+            if any(len(p) != 2 or p[0] < 0 or p[1] < 0 for p in v):
+                raise ValueError("every cell must be [row, col] with row >= 0 and col >= 0")
+        return v
+
+    @field_validator("cells_grid")
+    @classmethod
+    def _cells_grid(cls, v):
+        if v is not None and (len(v) != 2 or v[0] < 1 or v[1] < 1):
+            raise ValueError("cells_grid needs 2 positive numbers: [rows, cols]")
+        return v
+
     @model_validator(mode="after")
     def _zone(self):
-        if self.bbox is None and (self.zone or "global") not in ZONES:
+        if self.bbox is None and self.cells is None and (self.zone or "global") not in ZONES:
             raise ValueError(f"unknown zone '{self.zone}'")
+        if self.cells is not None and self.cells_grid is not None:
+            rows, cols = self.cells_grid
+            if any(p[0] >= rows or p[1] >= cols for p in self.cells):
+                raise ValueError(f"cells must be inside cells_grid ({rows} x {cols})")
         return self
 
 
 def cache_key(req: ComposeRequest, dataset_id: str, data_stamp) -> str:
     payload = req.model_dump(exclude={"include_notes"})
     payload["dataset"] = dataset_id
+    if req.cells is not None:
+        payload["zone"] = payload["bbox"] = None
+        payload["cells"] = sorted(set(map(tuple, req.cells)))   # same area in another order = same piece
+    else:
+        payload["cells_grid"] = None
     if req.bbox is not None:
         payload["zone"] = None
     payload["_data"] = data_stamp
@@ -265,7 +295,8 @@ def compose(req: ComposeRequest, request: Request):
         end = int(req.end) if isinstance(req.end, str) and req.end.isdigit() else req.end
         try:
             orchestra.compose(
-                [str(f) for f in group["files"]], zone=None if req.bbox else req.zone, bbox=req.bbox,
+                [str(f) for f in group["files"]], zone=None if (req.bbox or req.cells) else req.zone,
+                bbox=None if req.cells else req.bbox, cells=req.cells, cells_grid=req.cells_grid if req.cells else None,
                 surface=req.surface, start=start, end=end, loop=req.loop, mapping=req.mapping,
                 key=req.key, scale=req.scale, bpm=req.bpm, palette=req.palette, only=req.variables,
                 out_dir=folder, name="score", preview=req.score_image, render=req.audio,
@@ -275,7 +306,9 @@ def compose(req: ComposeRequest, request: Request):
         except orchestra.ComposeError as e:
             raise HTTPException(400, str(e))
         (folder / "score_preview.wav").unlink(missing_ok=True)  # rough synth preview not needed here
-        (folder / "request.json").write_text(json.dumps({**req.model_dump(), "dataset": ds_id}, default=str))
+        echo = {**req.model_dump(exclude={"cells"}), "dataset": ds_id,      # the positions are not echoed back,
+                "n_cells": len(req.cells) if req.cells else None}             # only how many were sent
+        (folder / "request.json").write_text(json.dumps(echo, default=str))
         return build_response(request, key, req.include_notes, False, time.perf_counter() - t0)
 
 

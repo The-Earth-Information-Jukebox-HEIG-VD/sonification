@@ -130,6 +130,52 @@ def zone_mask(lat, lon, bbox, land_fraction=None, surface="all"):
     return mask
 
 
+def cells_mask(shape, cells, land_fraction=None, surface="all", grid=None):
+    """Mask from a list of positions on the data array instead of a lat/lon box.
+
+    cells : [[row, col], ...] or an (N, 2) integer array (e.g. np.load("positions.npy")).
+            row 0 = top of the array (north), col 0 = left edge (180°W), like the maps.
+    grid  : (rows, cols) of the array the positions refer to, when it is not this map's own
+            shape (e.g. positions picked on a 720 x 1440 picture, data on 180 x 360). The
+            selection is then rescaled onto this map.
+    """
+    c = np.asarray(cells)
+    if c.ndim != 2 or c.shape[1] != 2 or len(c) == 0:
+        raise ValueError("cells must be a non-empty list of [row, col] positions")
+    if not np.issubdtype(c.dtype, np.integer):
+        if not (np.issubdtype(c.dtype, np.number) and np.all(c == np.floor(c))):
+            raise ValueError("cell positions must be whole numbers [row, col]")
+        c = c.astype(np.int64)
+    h, w = int(shape[0]), int(shape[1])
+    gh, gw = (int(grid[0]), int(grid[1])) if grid is not None else (h, w)
+    if gh < 1 or gw < 1:
+        raise ValueError("cells_grid must be [rows, cols], both positive")
+    r, k = c[:, 0], c[:, 1]
+    if r.min() < 0 or k.min() < 0 or r.max() >= gh or k.max() >= gw:
+        raise ValueError(f"cell positions must be inside the {gh} x {gw} array "
+                         f"(row 0..{gh - 1}, col 0..{gw - 1}); got rows {r.min()}..{r.max()}, cols {k.min()}..{k.max()}")
+    if (gh, gw) == (h, w):
+        mask = np.zeros((h, w), dtype=bool)
+        mask[r, k] = True
+    else:
+        src = np.zeros((gh, gw), dtype=bool)
+        src[r, k] = True
+        # every cell of this map looks up the source cell under its centre (covers a finer map) ...
+        rows = np.minimum(((np.arange(h) + 0.5) * gh / h).astype(int), gh - 1)
+        cols = np.minimum(((np.arange(w) + 0.5) * gw / w).astype(int), gw - 1)
+        mask = src[rows][:, cols]
+        # ... and every position marks the cell it falls in (so a small selection survives a coarser map)
+        mask[np.minimum(((r + 0.5) * h / gh).astype(int), h - 1),
+             np.minimum(((k + 0.5) * w / gw).astype(int), w - 1)] = True
+    if surface != "all":
+        if land_fraction is None:
+            raise ValueError("map has no land_fraction; use --surface all")
+        mask &= (land_fraction >= 0.5) if surface == "land" else (land_fraction < 0.5)
+    if not mask.any():
+        raise ValueError(f"the selected cells ({surface}) contain no grid cells of this map")
+    return mask
+
+
 def zone_series(field, lat, mask):
     """Area-weighted (cos lat) mean and spatial std per frame, ignoring NaN."""
     w = np.cos(np.deg2rad(lat))[:, None] * np.ones(field.shape[1:])
