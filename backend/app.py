@@ -57,7 +57,7 @@ COMPOSITION_ID = re.compile(r"[0-9a-f]{16}")         # what cache_key() produces
 # them up by date (temperature since 1880 with precipitation joining in 2000 ...). The Docker image sets it:
 # there every dataset holds one variable. 0 (default) = one dataset per request, as before.
 MERGE_DATASETS = os.environ.get("JUKEBOX_MERGE_DATASETS", "0").lower() not in ("", "0", "false", "no")
-# 0 = only what the frontend uses is served: GET /api/instruments, POST /api/sonify (and /api/health).
+# 0 = only what the frontend uses is served: /api/instruments, /api/sonify, /api/zones/zone-data, /api/zones/series, /api/zones/groove (and /api/health).
 # The Docker image sets it. 1 (default) = also the engine's own endpoints, for development and tests.
 FULL_API = os.environ.get("JUKEBOX_FULL_API", "1").lower() not in ("", "0", "false", "no")
 CHUNK_SECONDS = float(os.environ.get("JUKEBOX_CHUNK_SECONDS", "30"))     # length of one piece of POST /api/sonify
@@ -512,7 +512,7 @@ def instruments():
                      "units": display_units(best),
                      "first_time_period": times[0][:n] if times else None,
                      "last_time_period": times[-1][:n] if times else None,
-                     # what the webapp's InstrumentInfo declares (webapp/src/services/zoneApi.ts)
+                     # what the webapp's InstrumentInfo declares (webapp/src/services/sonificationApi.ts)
                      "midi_program": cfg["program"], "pitch_range": [cfg["low"], cfg["high"]],
                      "role": ROLE_LABELS.get(cfg["role"], cfg["role"]), "always_playing": bool(cfg.get("always_on"))})
     return {"palette": "orchestra", "by_dataset": {r["dataset_id"]: r["instrument"] for r in rows}, "instruments": rows}
@@ -639,7 +639,7 @@ def sonify(req: SonifyRequest, request: Request):
 
 
 class ZoneDataRequest(SonifyRequest):
-    """The same request as the webapp sends it (webapp/src/services/zoneApi.ts): a list of datasets."""
+    """The same request as the webapp sends it (webapp/src/services/sonificationApi.ts): a list of datasets."""
     dataset_ids: Optional[list[str]] = Field(None, description="dataset ids to combine into one piece")
 
 

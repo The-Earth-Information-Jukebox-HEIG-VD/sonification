@@ -21,7 +21,7 @@ Input  (from the data-extraction side, monthly, on the team's 0.25 deg common gr
     lightning_<YYYY>_<MM>.npy                   (--lightning DIR, one file per month, 2017-03 -> 2023-07)
         [720,1440] float16, share of the pixel with lightning (0-1), observed between 55S and 55N only
     co2_<YYYY>_<MM>.npy                         (--co2 DIR, one file per month, 2002-09 -> 2022-03)
-        [356,720] float32, ppm, 0.5 deg covering 89N -> 89S (assumed: row 0 = north, column 0 = 180W,
+        [720,1440] float32, ppm, 0.25 deg (row 0 = north, column 0 = 180W,
         like the other files; that folder has no README)
 
 Any .npy grid that covers 360 deg of longitude in W columns is read: step = 360 / W, and the H rows are
