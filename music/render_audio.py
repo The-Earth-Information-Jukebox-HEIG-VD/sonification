@@ -21,6 +21,7 @@ import shutil
 import stat
 import subprocess
 import wave
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -84,6 +85,22 @@ def fft_convolve(x, h):
     n = len(x) + len(h) - 1
     nfft = 1 << (n - 1).bit_length()
     return np.fft.irfft(np.fft.rfft(x, nfft) * np.fft.rfft(h, nfft), nfft)[:n]
+
+
+@lru_cache(maxsize=2)           # one entry is ~34 MB (2^20 complex x 2 channels); a 30 s chunk uses one
+def _hall_spectrum(sr: int, nfft: int) -> np.ndarray:
+    """rfft of hall_ir(sr) padded to nfft, both channels (read-only). Every chunk has about the same length,
+    so the hall and its spectrum are computed once instead of once per render."""
+    spec = np.fft.rfft(hall_ir(sr), nfft, axis=0)
+    spec.flags.writeable = False
+    return spec
+
+
+def hall_reverb(dry: np.ndarray, sr: int) -> np.ndarray:
+    """dry (n, 2) convolved with the stereo hall, cut to n samples (the same as fft_convolve per channel)."""
+    n = len(dry) + int(2.4 * sr) - 1                      # len(hall_ir(sr)) = int(2.4 * sr)
+    nfft = 1 << (n - 1).bit_length()
+    return np.fft.irfft(np.fft.rfft(dry, nfft, axis=0) * _hall_spectrum(sr, nfft), nfft, axis=0)[: len(dry)]
 
 
 def render(midi_path, sf2: Path, sr=44100, reverb=0.28, gain_db=-6.0, tail_s=3.0, engine="auto"):
@@ -203,8 +220,7 @@ def render(midi_path, sf2: Path, sr=44100, reverb=0.28, gain_db=-6.0, tail_s=3.0
 
     dry = out.astype(np.float64)
     if reverb > 0:
-        ir = hall_ir(sr)
-        wet = np.stack([fft_convolve(dry[:, c], ir[:, c])[: len(dry)] for c in range(2)], axis=1)
+        wet = hall_reverb(dry, sr)
         mixed = (1 - reverb) * dry + reverb * wet * 1.4
     else:
         mixed = dry

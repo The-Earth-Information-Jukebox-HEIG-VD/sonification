@@ -37,8 +37,12 @@ from __future__ import annotations
 
 import argparse
 import glob
+import hashlib
 import json
+import os
 import sys
+import threading
+from collections import OrderedDict
 from pathlib import Path
 
 import numpy as np
@@ -900,6 +904,58 @@ def _time_window(times, start, end, count=None):
     return slice(lo, hi + 1)
 
 
+AREA_CACHE_SIZE = 512          # areas x variables kept: one entry is one float per frame (~14 kB for 1880 -> 2025)
+_area_cache: "OrderedDict[tuple, np.ndarray]" = OrderedDict()
+_area_lock = threading.Lock()
+
+
+def _area_key(z, mask):
+    """(file, its version, the mask) or None when `z` does not come from a file (then nothing is cached)."""
+    path = getattr(getattr(z, "zip", None), "filename", None)
+    if not path:
+        return None
+    st = os.stat(path)
+    return (os.path.realpath(path), st.st_mtime_ns, st.st_size, mask.shape,
+            hashlib.sha1(np.packbits(mask)).hexdigest())
+
+
+def area_mean(z, mask):
+    """Mean of the map over `mask`, per frame: cos-latitude weighted, NaN ignored (zone_to_midi.zone_series).
+    The ONE way an area is averaged: the music (compose) and the chart (POST /api/zones/series) both use it.
+
+    Cached in memory per (file, mask): every 30 s chunk of the same zone needs the same full series (the anomaly
+    is computed against the whole series), and reading it means decompressing the map's whole history. The
+    returned array is read-only; a rebuilt file (new mtime/size) is a new key."""
+    key = _area_key(z, mask)
+    if key is not None:
+        with _area_lock:
+            hit = _area_cache.get(key)
+            if hit is not None:
+                _area_cache.move_to_end(key)
+                return hit
+    m, _ = zone_series(z["data"], z["lat"], mask)
+    m.flags.writeable = False
+    if key is not None:
+        with _area_lock:
+            _area_cache[key] = m
+            while len(_area_cache) > AREA_CACHE_SIZE:
+                _area_cache.popitem(last=False)
+    return m
+
+
+def area_series(src, cells, cells_grid=None, surface="all"):
+    """Mean per frame of one map over an area given as cells: load_map -> cells_mask -> area_mean.
+
+    src        : path of a map (.npz) or an already loaded (z, meta) pair from load_map
+    cells      : [[row, col], ...] on the data array, or on `cells_grid` when it is given (rescaled)
+    Returns (mean [T], mask [H, W], times [T] or None, meta). Raises ValueError for an invalid selection."""
+    z, meta = load_map(str(src)) if isinstance(src, (str, Path)) else src
+    land = z["land_fraction"] if "land_fraction" in z.files else None
+    mask = cells_mask((len(z["lat"]), len(z["lon"])), cells, land, surface, grid=cells_grid)
+    times = z["time"] if "time" in z.files else None
+    return area_mean(z, mask), mask, times, meta
+
+
 def _align_by_date(full: dict):
     """Put the variables on ONE time axis when their maps come from different datasets.
 
@@ -936,8 +992,8 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
             preview=False, render=False, reverb=0.28, audio_format="wav", verbose=False,
             intro=True, tension=True, climax=True, humanize=0.5,
             style="data", quantize="scale", markers=True, marker_threshold=1.5, audio_engine="auto",
-            cells=None, cells_grid=None, duration_s=None, pitch_range="window", eras=False, genre="orchestra",
-            tempo_from_temperature=True, temperature_sound="heartbeat"):
+            cells=None, cells_grid=None, duration_s=None, pitch_range="window", series_in=None, eras=False,
+            genre="orchestra", tempo_from_temperature=True, temperature_sound="heartbeat"):
     """Data maps -> score. Writes MIDI (+ stems, JSON, optional PNG/audio) to out_dir and returns
     a dict with the score document, file paths and stats.
 
@@ -956,6 +1012,11 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
     duration_s: play this many seconds of data starting at `start` (instead of giving `end`).
     As many bars as fit at about `bpm` are taken, then the tempo is nudged so that they last
     exactly duration_s. Near the end of the dataset, where fewer frames are left, the piece is shorter.
+
+    series_in: {variable: (values, meta)} played instead of reading `maps` (vinyl mode, music/groove.py:
+    one value per PLACE along the needle's path, at one date). The pitch scale of each variable is then its
+    dataset's global range (meta vmin / vmax), so the same value is the same note wherever the needle is.
+    `bbox` should be given (the box around the path); start / end / duration_s do not apply.
 
     eras (fun mode, data style only): the date of each bar picks the music of its time, from a Romantic
     orchestra before 1910 to modern pop / trap after 2010 (see eras.py). Pitch and loudness stay the data's;
@@ -1027,8 +1088,16 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
 
     # ---- zone mean per frame for every variable
     series, full = {}, {}
-    files = collect_maps(maps if isinstance(maps, (list, tuple)) else [maps])
-    if not files:
+    if series_in is not None:              # vinyl mode: values along a path in space, given by the caller
+        for var, (vals, meta) in series_in.items():
+            if var not in orch or (only and var not in only) or var in excl:
+                continue
+            m = np.asarray(vals, dtype=np.float64)
+            lo, hi = meta.get("vmin"), meta.get("vmax")
+            span = (float(lo), float(hi)) if lo is not None and hi is not None and hi > lo else None
+            full[var] = dict(mean=m, z=np.zeros(len(m)), meta=meta, times=None, file=None, span=span)
+    files = [] if series_in is not None else collect_maps(maps if isinstance(maps, (list, tuple)) else [maps])
+    if series_in is None and not files:
         raise ComposeError("no map files found")
     for f in files:
         z, meta = load_map(str(f))
@@ -1038,17 +1107,17 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
         land = z["land_fraction"] if "land_fraction" in z.files else None
         try:
             if use_cells:
-                mask = cells_mask((len(z["lat"]), len(z["lon"])), cells, land, surface, grid=cells_grid)
+                m, mask, times, _ = area_series((z, meta), cells, cells_grid, surface)
                 if bbox is None:
                     la, lo = z["lat"][mask.any(axis=1)], z["lon"][mask.any(axis=0)]
                     bbox = (float(la.min()), float(la.max()), float(lo.min()), float(lo.max()))
                     n_cells = int(mask.sum())
             else:
                 mask = zone_mask(z["lat"], z["lon"], bbox, land, surface)
+                times = z["time"] if "time" in z.files else None
+                m = area_mean(z, mask)
         except ValueError as e:
             raise ComposeError(str(e))
-        times = z["time"] if "time" in z.files else None
-        m, _ = zone_series(z["data"].astype(np.float32), z["lat"], mask)
         # anomaly vs the seasonal normal, computed on the FULL series before any time window
         _, zsc, _ = comp.seasonal_anomaly(m, times, log=var in comp.SKEWED,
                                           already_anomaly=bool(meta.get("anomaly")))
@@ -1056,13 +1125,17 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
             raise ComposeError(f"two maps for '{var}' ({full[var]['file']} and {Path(f).name}): give one per variable")
         full[var] = dict(mean=m, z=zsc, meta=meta, times=times, file=Path(f).name)
     for d in full.values():                # lowest and highest value of the WHOLE series of this area
+        if d.get("span") is not None:      # vinyl mode: the dataset's global range, set above
+            continue
         ok = np.isfinite(d["mean"])
         d["span"] = (float(d["mean"][ok].min()), float(d["mean"][ok].max())) if ok.any() else (np.nan, np.nan)
     hint = _align_by_date(full)            # maps from different datasets -> one time axis (no-op for one dataset)
 
     # ---- the temperature sets the tempo: the hotter the bar, the faster (data style)
     temp_tempo = None
-    if tempo_from_temperature and not musical and LEAD_VAR in full and np.isfinite(full[LEAD_VAR]["span"][0]):
+    # (not in vinyl mode: there the values are places along a path, at one date, on Teo's fixed grid of points per bar)
+    if tempo_from_temperature and series_in is None and not musical and LEAD_VAR in full \
+            and np.isfinite(full[LEAD_VAR]["span"][0]):
         dT = full[LEAD_VAR]
         # robust scale: the 5th..95th percentile of the whole series of the area (a few extreme months would
         # otherwise squeeze every ordinary month into the middle tempos)

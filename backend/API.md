@@ -1,6 +1,6 @@
 # Sonification API: the engine, for development
 
-> **Frontend developers: read [`FRONTEND_API.md`](FRONTEND_API.md).** It has the two calls you need. This file documents the engine's own endpoints, which the deployed backend does not serve (`JUKEBOX_FULL_API=0` in the Docker image).
+> **Frontend developers: read [`FRONTEND_API.md`](FRONTEND_API.md).** It has the calls you need. This file documents the engine's own endpoints, which the deployed backend does not serve (`JUKEBOX_FULL_API=0` in the Docker image).
 
 Backend for the Earth Information Jukebox. The frontend sends **what to listen to** (dataset, zone or selected cells, time window, a few musical options). The backend composes the orchestra and returns **the score as JSON plus URLs** to the MIDI, the per-instrument stems and the rendered audio.
 
@@ -35,14 +35,15 @@ uvicorn backend.app:app --reload --port 8000
 | GET | `/api/instruments` | **frontend call**: the datasets and the instrument that plays each (`FRONTEND_API.md`) |
 | GET | `/api/datasets` | available datasets: id, variables (units, range, instrument), number of frames, time range |
 | **POST** | **`/api/zones/zone-data`** | **frontend call**: the same as `/api/sonify` with the webapp's field names (`dataset_ids`, `values`); see `FRONTEND_API.md` |
+| **POST** | **`/api/zones/series`** | **frontend call**: the monthly series of the selected points for each dataset (chart data, no audio); see `FRONTEND_API.md` section 3 |
 | **POST** | **`/api/sonify`** | **frontend call**: selected points + one time period in, 30 s of MP3 inside the JSON out (`FRONTEND_API.md`) |
 | POST | `/api/sonify/debug` | development only: the same with the engine's knobs and a detailed answer |
 | **POST** | **`/api/compose`** | **compose a piece**, with every option and the full score (see below) |
 | GET | `/api/compositions/{id}` | fetch an earlier composition again (`?include_notes=false` for a light payload) |
 | GET | `/api/files/{id}/{file}` | download a generated file (MIDI, MP3/WAV, JSON, PNG); the compose response gives you the full URLs |
 
-## The frontend's two calls
-`GET /api/instruments` and `POST /api/sonify` are described in **[`FRONTEND_API.md`](FRONTEND_API.md)**, one page, no options. They are all the deployed backend serves.
+## The frontend's calls
+`GET /api/instruments`, `POST /api/sonify` / `POST /api/zones/zone-data`, `POST /api/zones/series` (chart data) and `POST /api/zones/groove` (vinyl mode) are described in **[`FRONTEND_API.md`](FRONTEND_API.md)**, one page, no options. They are all the deployed backend serves.
 
 For development, `POST /api/sonify/debug` takes the same request plus the engine's knobs (`duration_s`, `audio_format`, `embed_audio`, and `options` = any field of `/api/compose` below) and answers with every detail: `values` and `units` of each instrument, `time_end`, `duration_s`, `audio_url`, `composition_id`, `source_dataset(s)`, `real_data`, `anomaly`, `cell_count`.
 
@@ -269,23 +270,33 @@ All fields are optional. The smallest request is `{}` (global zone, default data
 
 ```
 
-### New in v2.6 (the temperature sets the tempo)
+### New in v2.9 (the temperature sets the tempo)
 - data style, every genre, by default: each bar's tempo follows the temperature of the bar (x0.75 cold .. x1.25 hot around the genre's tempo, on the 5th..95th percentile of the area's whole series); in `realistic` the temperature is a **heartbeat** of 60 to 130 bpm (it replaces the birdsong). `"tempo_from_temperature": false` gives one fixed tempo (`POST /api/compose`).
 - `duration_s` is still exact: the number of bars is chosen with the bar tempos, so a 30 s chunk covers about 8 to 13 months (10 at an average temperature). Always use `next_time_period`.
 - `score.tempo_map` has one entry per tempo change, `score.tempo_range` the slowest and fastest, `score.tempo_from_temperature` says whether it was used. `score.bpm` is the genre's reference tempo (the heart's median rate in `realistic`).
 
-### New in v2.5 (genres and a realistic mode)
+### New in v2.8 (genres and a realistic mode)
 - new `genre` in `POST /api/compose`, `POST /api/sonify` and `POST /api/zones/zone-data`: `orchestra` (default), `ragtime`, `swing`, `rocknroll`, `funk`, `synthpop`, `house`, `trap` (one instrument set and groove for the whole piece, `music/eras.py`) or `realistic` (recordings of rain, fire, thunder, a heartbeat, traffic, lamp hum; `music/soundscape.py`). Aliases: `jazz`, `rock`, `disco`, `electro`, `pop`, `classical`. Data style only; not together with `eras`.
 - `bpm` is now optional: the genre's usual tempo when not sent (76 for the orchestra and the realistic mode).
 - new `GET /api/genres` (also served by the deployed image) and `GET /api/instruments?genre=...` (the instrument of each dataset in that genre; without `?genre=` the answer is unchanged).
 - `score.genre`; instrument names follow the genre (`"Temperature - Clean electric guitar (eighth notes)"`, `"Rain - Rain sounds"`). `/api/sonify` and `/api/zones/zone-data` answer with `genre` when it was sent.
 - `GET /api/health`: `realistic_sounds` (the recordings are installed: `python music/soundscape.py --download`, done in the Docker image).
 
-### New in v2.4 (music through the ages)
+### New in v2.7 (music through the ages)
 - new boolean `eras` (default `false`) in `POST /api/compose`, `POST /api/sonify` and `POST /api/zones/zone-data`: each bar is played in the musical style of its date, from a Romantic orchestra before 1910 to modern pop / trap from 2010 (8 eras, see `music/eras.py` and `FRONTEND_API.md`). Data style only (`400` with `style: musical`).
 - pitch and loudness are still the data's; the instruments, the comping rhythm (stride piano, walking bass, funk clavinet, house off-beats, 808), swing and a drum kit change with the era. No anomaly markers in this mode (the drum kit uses the percussion channel).
 - `score.eras`: `[{key, name, start_bar, bars, start_s, time}]`; `score.bars[i].era`; an extra instrument `era_drums`.
 - `/api/sonify` and `/api/zones/zone-data` answer with `era` (the era at the start) and `eras` when `eras` is true.
+
+### New in v2.5 (speed)
+- `mask` on `POST /api/zones/zone-data`, `/api/sonify` and `/api/zones/series`: the selected area as a zlib-compressed bitmap of the 0.1° point grid, instead of `points` (an ocean: ~3 kB instead of ~3 MB; `FRONTEND_API.md`, "mask"). Same cells, same music.
+- The mean of an area is kept in memory per (map file, area) (`orchestra.area_mean`, 512 entries): the next pieces of the same area no longer re-read the map's whole history. It is computed on the selected cells only (`zone_to_midi.zone_series`).
+- `build_monthly_dataset.py` writes uncompressed `.npz` (reading is ~7x faster, the files ~2x larger); `prepare_data.py` rebuilds the datasets once after the update.
+- Listing the datasets reads the array shapes from the file headers instead of loading every array (~360 MB less memory).
+- The reverb's hall response and its spectrum are computed once per process.
+
+### New in v2.4 (chart data)
+- `POST /api/zones/series`: points + `dataset_ids` in, one value per month for each dataset out (`start`, `values` with `null` gaps, `units`, `anomaly`, `yearly`). The same area mean as the music (`orchestra.area_series`); cached in memory (256 areas x datasets). Served by the deployed backend too (`FRONTEND_API.md`, section 3).
 
 ### New in v2.3 (instruments after a listening test)
 - lightning: **timpani** (was a xylophone, too close to the snow's glockenspiel).

@@ -14,7 +14,7 @@ Config (environment variables):
   JUKEBOX_CACHE_DIR   where compositions are written / cached        default: backend/cache
   JUKEBOX_BUILT_DIR   datasets built by backend/prepare_data.py      default: <cache>/_datasets
   JUKEBOX_MERGE_DATASETS  1 = each variable from its own dataset, lined up by date   default: 0
-  JUKEBOX_FULL_API    0 = only the frontend's two calls (+ health) are served      default: 1
+  JUKEBOX_FULL_API    0 = only the frontend's calls (FRONTEND_PATHS) are served  default: 1
   JUKEBOX_CHUNK_SECONDS   length of one piece returned by POST /api/sonify         default: 30
   JUKEBOX_CORS        comma-separated allowed origins                default: *
 """
@@ -28,6 +28,8 @@ import re
 import sys
 import threading
 import time
+import zlib
+from collections import OrderedDict
 from pathlib import Path
 from typing import Literal, Optional
 
@@ -40,6 +42,7 @@ from pydantic import AliasChoices, BaseModel, Field, ValidationError, field_vali
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "music"))
+import groove  # noqa: E402
 import orchestra  # noqa: E402
 import eras as genres_mod  # noqa: E402
 import soundscape  # noqa: E402
@@ -50,7 +53,7 @@ CACHE_DIR = Path(os.environ.get("JUKEBOX_CACHE_DIR", ROOT / "backend" / "cache")
 # datasets converted from the team's raw folders by backend/prepare_data.py (the data folder can be read-only)
 BUILT_DIR = Path(os.environ.get("JUKEBOX_BUILT_DIR") or CACHE_DIR / "_datasets")
 CORS = [o.strip() for o in os.environ.get("JUKEBOX_CORS", "*").split(",")]
-API_VERSION = "2.6"
+API_VERSION = "2.9"
 COMPOSITION_ID = re.compile(r"[0-9a-f]{16}")         # what cache_key() produces
 # 1 = a request that names no dataset takes EACH variable from its own best dataset and the composer lines
 # them up by date (temperature since 1880 with precipitation joining in 2000 ...). The Docker image sets it:
@@ -60,7 +63,8 @@ MERGE_DATASETS = os.environ.get("JUKEBOX_MERGE_DATASETS", "0").lower() not in ("
 # The Docker image sets it. 1 (default) = also the engine's own endpoints, for development and tests.
 FULL_API = os.environ.get("JUKEBOX_FULL_API", "1").lower() not in ("", "0", "false", "no")
 CHUNK_SECONDS = float(os.environ.get("JUKEBOX_CHUNK_SECONDS", "30"))     # length of one piece of POST /api/sonify
-FRONTEND_PATHS = ("/api/health", "/api/instruments", "/api/genres", "/api/sonify", "/api/zones/zone-data")
+FRONTEND_PATHS = ("/api/health", "/api/instruments", "/api/genres", "/api/sonify", "/api/zones/zone-data",
+                  "/api/zones/series", "/api/zones/groove")
 
 app = FastAPI(title="Earth Information Jukebox: sonification API", version=API_VERSION,
               description="Turns NASA EIC intensity maps into an orchestra (MIDI + audio).")
@@ -71,6 +75,15 @@ app.add_middleware(CORSMiddleware, allow_origins=CORS, allow_methods=["*"], allo
 # Datasets: groups of maps "<prefix>_<variable>.npz" sharing one time axis
 # ----------------------------------------------------------------------------
 _datasets_cache: dict = {"mtime": None, "data": {}}
+
+
+def npz_shape(z, name: str) -> list[int]:
+    """Shape of one array of an open .npz, read from its .npy header only: z[name].shape would load (and
+    inflate) the whole array, ~360 MB for the deployed datasets on every rescan."""
+    with z.zip.open(f"{name}.npy") as fh:
+        major, _ = np.lib.format.read_magic(fh)
+        read = np.lib.format.read_array_header_1_0 if major == 1 else np.lib.format.read_array_header_2_0
+        return list(read(fh)[0])
 
 
 def scan_datasets() -> dict:
@@ -88,11 +101,12 @@ def scan_datasets() -> dict:
         if not var:
             continue
         prefix = f.stem[: -len(var) - 1] if f.stem.endswith("_" + var) else f.stem
-        g = groups.setdefault(prefix, {"id": prefix, "variables": {}, "files": []})
+        g = groups.setdefault(prefix, {"id": prefix, "variables": {}, "files": [], "file_of": {}})
         with np.load(f) as z:
             times = [str(t) for t in z["time"]] if "time" in z.files else []
-            shape = list(z["data"].shape)
+            shape = npz_shape(z, "data")
         g["files"].append(f)
+        g["file_of"][var] = f
         g["variables"][var] = {"units": meta.get("units"), "vmin": meta.get("vmin"), "vmax": meta.get("vmax"),
                                "frames": shape[0], "grid": shape[1:], "source": meta.get("source"),
                                "instrument": orchestra.ORCHESTRA.get(var, {}).get("name")}
@@ -111,7 +125,7 @@ def scan_datasets() -> dict:
 
 
 def public_dataset(g: dict) -> dict:
-    return {k: v for k, v in g.items() if k not in ("files",)}
+    return {k: v for k, v in g.items() if k not in ("files", "file_of")}
 
 
 def default_dataset() -> Optional[str]:
@@ -445,6 +459,56 @@ POINT_GRID = (1800, 3600)      # lat/lng points are placed on a 0.1 degree grid,
 SHORT_IDS = {"surface_temperature": "temperature", "aerosol_dust": "dust", "aerosol_smoke": "smoke",
              "snowfall": "snow", "nightlights": "night_lights"}                    # variable -> dataset_id
 ROLE_LABELS = {"timpani": "percussion"}
+MAX_POINTS = 20000             # points of one POST /api/zones/series request
+
+
+def display_units(info: dict) -> Optional[str]:
+    """The units the frontend shows for a variable of scan_datasets() (GET /api/instruments, /api/zones/series)."""
+    return "degC anomaly" if info.get("anomaly") else info.get("units")
+
+
+def points_to_cells(points) -> list[list[int]]:
+    """Selected lat/lng points -> the distinct [row, col] cells of the 0.1 degree POINT_GRID they fall in, sorted."""
+    gh, gw = POINT_GRID
+    lat = np.fromiter((p.lat for p in points), dtype=np.float64, count=len(points))
+    lng = np.fromiter((p.lng for p in points), dtype=np.float64, count=len(points))
+    rows = np.minimum(((90 - lat) * gh / 180).astype(np.int64), gh - 1)          # lat <= 90: never negative
+    cols = np.minimum((((lng + 180) % 360) * gw / 360).astype(np.int64), gw - 1)
+    flat = np.unique(rows * gw + cols)                                            # distinct, sorted by (row, col)
+    return np.stack([flat // gw, flat % gw], axis=1).tolist()
+
+
+MASK_BYTES = POINT_GRID[0] * POINT_GRID[1] // 8      # the POINT_GRID as bits: 810 000 bytes before compression
+
+
+def mask_to_cells(mask: str) -> list[list[int]]:
+    """`mask` of a request -> the [row, col] cells of POINT_GRID it selects, sorted (same as points_to_cells).
+
+    mask = base64( zlib( packbits( POINT_GRID as booleans, row-major, row 0 = 90°N, col 0 = 180°W ) ) ).
+    The webapp marks the 0.1° cell of each of its points: the same cells as sending the points, in a few kB
+    instead of megabytes for an ocean (the browser's CompressionStream("deflate") writes this zlib format)."""
+    try:
+        packed = base64.b64decode(mask, validate=True)
+        z = zlib.decompressobj()
+        bits = z.decompress(packed, MASK_BYTES + 1)                # never inflates more than the grid
+    except (ValueError, zlib.error) as e:
+        raise HTTPException(422, f"mask is not base64 of zlib data: {e}")
+    if len(bits) != MASK_BYTES or not z.eof:
+        raise HTTPException(422, f"mask must hold exactly {POINT_GRID[0]} x {POINT_GRID[1]} bits "
+                                 f"({MASK_BYTES} bytes once inflated), got {len(bits)} bytes")
+    cells = np.argwhere(np.unpackbits(np.frombuffer(bits, dtype=np.uint8)).reshape(POINT_GRID))
+    if not len(cells):
+        raise HTTPException(422, "mask selects no cell")
+    return cells.tolist()
+
+
+def request_cells(req) -> Optional[list[list[int]]]:
+    """The POINT_GRID cells of a request's area, from `mask` (preferred) or `points`; None when it has neither."""
+    if getattr(req, "mask", None):
+        return mask_to_cells(req.mask)
+    if req.points:
+        return points_to_cells(req.points)
+    return None
 
 
 GENRE_INFO = {   # id -> what the frontend shows in its genre menu
@@ -503,7 +567,7 @@ def instruments(genre: Optional[str] = None):
         times = sorted(x for g in holders for x in g.get("times") or [])
         n = 7 if all(len({x[:7] for x in g.get("times") or []}) == len(g.get("times") or []) for g in holders) else 10
         rows.append({"dataset_id": SHORT_IDS.get(var, var), "name": label, "instrument": instrument,
-                     "units": ("degC anomaly" if best.get("anomaly") else best.get("units")),
+                     "units": display_units(best),
                      "first_time_period": times[0][:n] if times else None,
                      "last_time_period": times[-1][:n] if times else None,
                      # what the webapp's InstrumentInfo declares (webapp/src/services/zoneApi.ts)
@@ -533,6 +597,8 @@ class SonifyRequest(BaseModel):
     dataset_id: Optional[str | list[str]] = Field(None, description="a dataset_id of GET /api/instruments, or a list of "
                                                   "them to hear several instruments together")
     points: Optional[list[SonifyPoint]] = Field(None, description="the selected points: [{lat, lng, x, y}, ...]")
+    mask: Optional[str] = Field(None, description="the selected area as a compressed bitmap of the 0.1 degree grid, "
+                                "instead of points (see mask_to_cells / FRONTEND_API.md)")
     time_period: Optional[str | int] = Field(None, description="where the music starts: '1880-01'")
     aggregation: Literal["mean"] = Field("mean", description="how the points are combined: the area-weighted mean")
     genre: Optional[str] = Field(None, description="optional musical genre for the whole piece: orchestra (default), "
@@ -575,15 +641,13 @@ def make_chunk(req: SonifyRequest, request: Request, duration_s: float = CHUNK_S
             raise HTTPException(400, f"unknown dataset_id '{d}'; available: {ids} (see GET /api/instruments)")
         variables.append(k)
     # which area
-    if req.points:
-        gh, gw = POINT_GRID
-        cells = sorted({(min(int((90 - p.lat) * gh / 180), gh - 1), min(int(((p.lng + 180) % 360) * gw / 360), gw - 1))
-                        for p in req.points})
-        area = {"cells": [list(c) for c in cells], "cells_grid": list(POINT_GRID)}
+    cells = request_cells(req)
+    if cells is not None:
+        area = {"cells": cells, "cells_grid": list(POINT_GRID)}
     elif (req.zone_id or "").lower() in ZONES:
         area = {"zone": req.zone_id.lower()}
     else:
-        raise HTTPException(422, "points is empty: send the selected points [{lat, lng}, ...]")
+        raise HTTPException(422, "points is empty: send the selected points [{lat, lng}, ...] or a mask")
     # pitch_range "series": a long series is played chunk after chunk, so a value must be the same note in each
     if req.eras:
         opts["eras"] = True
@@ -629,7 +693,7 @@ def make_chunk(req: SonifyRequest, request: Request, duration_s: float = CHUNK_S
             "audio_format": audio.suffix[1:], "audio_url": out["files"]["audio"],
             "value": first[main][0] if main else None, "units": first[main][1] if main else None,
             "values": {v: x[0] for v, x in first.items()},
-            "point_count": len(req.points or []), "cell_count": score.get("cells"),
+            "point_count": len(req.points) if req.points else len(cells or []), "cell_count": score.get("cells"),
             "aggregation": req.aggregation, "time_end": end_time[:n] if end_time else None,
             "duration_s": score["duration_s"], "composition_id": out["id"], "cached": out["cached"],
             # which dataset of GET /api/datasets was played (the main variable's, when several were merged)
@@ -658,18 +722,25 @@ class ZoneDataRequest(SonifyRequest):
     dataset_ids: Optional[list[str]] = Field(None, description="dataset ids to combine into one piece")
 
 
-@app.post("/api/zones/zone-data")
-def zone_data(req: ZoneDataRequest, request: Request):
-    """POST /api/sonify under the path and with the field names of the webapp's code: `dataset_ids` in,
-    `dataset_ids` + `values` out. Datasets the server has no data for are left out, not an error, as long as
-    one remains; the answer says which ones are in the piece."""
-    sent = list(req.dataset_ids or ([req.dataset_id] if isinstance(req.dataset_id, str) else req.dataset_id or []))
+def known_dataset_ids(sent: list[str]) -> tuple[dict, list[str]]:
+    """{id: variable} for the ids the webapp sent, and the ids the server has data for (in the order sent).
+    400 when some were sent and none is known."""
     known = {v for g in scan_datasets().values() for v in g["variables"]}
     variable_of = {d: VARIABLE_ALIASES.get(d.strip().lower(), d.strip().lower()) for d in sent}
     kept = [d for d in sent if variable_of[d] in known]
     if sent and not kept:
         ids = sorted(SHORT_IDS.get(v, v) for v in known)
         raise HTTPException(400, f"none of {sent} is available; available: {ids} (see GET /api/instruments)")
+    return variable_of, kept
+
+
+@app.post("/api/zones/zone-data")
+def zone_data(req: ZoneDataRequest, request: Request):
+    """POST /api/sonify under the path and with the field names of the webapp's code: `dataset_ids` in,
+    `dataset_ids` + `values` out. Datasets the server has no data for are left out, not an error, as long as
+    one remains; the answer says which ones are in the piece."""
+    sent = list(req.dataset_ids or ([req.dataset_id] if isinstance(req.dataset_id, str) else req.dataset_id or []))
+    variable_of, kept = known_dataset_ids(sent)
     chunk = make_chunk(req.model_copy(update={"dataset_id": kept or None}), request)
     sent_id = {variable_of[d]: d for d in reversed(kept)}                 # variable -> the id the webapp used
     values = {sent_id.get(v, SHORT_IDS.get(v, v)): x for v, x in chunk["values"].items() if x is not None}
@@ -678,6 +749,235 @@ def zone_data(req: ZoneDataRequest, request: Request):
             "audio_data": chunk["audio_data"], "values": values, "point_count": chunk["point_count"],
             **({"era": chunk["era"], "eras": chunk["eras"]} if req.eras else {}),
             **({"genre": chunk["genre"]} if req.genre else {})}
+
+
+# ----------------------------------------------------------------------------
+# Frontend contract, vinyl mode: the needle moves through SPACE at one fixed date.
+# The frontend sends the stretch of path the needle crosses next; one point = one bar, or one beat.
+# ----------------------------------------------------------------------------
+GROOVE_BAR_SECONDS = 3.0       # the same bar as the normal mode (30 s = 10 bars), whatever points_per_bar: pieces join
+GROOVE_SNAP_DEG = 0.5          # places are snapped to this grid, so listeners crossing the same places share the cache
+GROOVE_MAX_BARS = 20           # bars of one request (20 x 3 s = 60 s of music)
+GROOVE_MAX_STOPS = GROOVE_MAX_BARS * 4      # points of one request at 4 points per bar
+GROOVE_VERSION = 2             # bump when the groove music changes, so cached pieces are not reused
+
+
+def _snap(v: float) -> float:
+    return round(round(v / GROOVE_SNAP_DEG) * GROOVE_SNAP_DEG, 4)
+
+
+class GrooveRequest(BaseModel):
+    zone_id: Optional[str] = Field(None, description="the frontend's id of this stretch or record; echoed back")
+    dataset_ids: Optional[list[str]] = Field(None, description="dataset ids of GET /api/instruments (default: all)")
+    time_period: str = Field(description="the fixed date: '2018-07' (that month) or '2018' (the mean of the year)")
+    path: list[SonifyPoint] = Field(min_length=1, max_length=GROOVE_MAX_STOPS,
+                                    description="the places the needle crosses, in order: [{lat, lng}, ...]; "
+                                    "a multiple of points_per_bar, at most "
+                                    f"{GROOVE_MAX_BARS} bars of {GROOVE_BAR_SECONDS:g} s")
+    points_per_bar: Literal[1, 2, 4] = Field(1, description="points of `path` per bar: 4 = one point per beat "
+                                             f"({GROOVE_BAR_SECONDS / 4:g} s each), 40 points for 30 s")
+    radius_deg: float = Field(1.5, ge=0.1, le=10, description="how wide the needle reads: each place is the mean "
+                              "over a disc of this radius (degrees)")
+
+    @field_validator("time_period")
+    @classmethod
+    def _period(cls, v):
+        m = re.fullmatch(r"\s*(\d{4})(?:-(\d{1,2}))?\s*", str(v))
+        if not m or (m.group(2) and not 1 <= int(m.group(2)) <= 12):
+            raise ValueError("time_period must be a month 'YYYY-MM' or a year 'YYYY'")
+        return m.group(1) + (f"-{int(m.group(2)):02d}" if m.group(2) else "")
+
+    @model_validator(mode="after")
+    def _whole_bars(self):
+        n, k = len(self.path), self.points_per_bar
+        if n % k:
+            raise ValueError(f"path has {n} points: send a multiple of points_per_bar ({k}), whole bars")
+        if n // k > GROOVE_MAX_BARS:
+            raise ValueError(f"path has {n // k} bars: at most {GROOVE_MAX_BARS} "
+                             f"({GROOVE_MAX_BARS * GROOVE_BAR_SECONDS:g} s)")
+        return self
+
+
+@app.post("/api/zones/groove")
+def zone_groove(req: GrooveRequest, request: Request):
+    """Vinyl mode: the music of a path in space at one date. Every point of `path` is one bar, or one beat with
+    points_per_bar = 4 (half a bar with 2); the values are
+    read on the needle (a disc of `radius_deg` around the place) and played on each dataset's GLOBAL scale, so
+    a value is the same note wherever the needle is. Pieces have a fixed bar length (`bar_seconds`) and key,
+    so consecutive stretches of the same groove join without a jump."""
+    sent = list(req.dataset_ids or [])
+    variable_of, kept = known_dataset_ids(sent)
+    variables = [variable_of[d] for d in kept] or None
+    sources = merged_sources(variables, req.time_period)
+    if not sources:
+        raise HTTPException(404, "no dataset on the server")
+    ds = scan_datasets()
+    files = {v: ds[k]["file_of"][v] for v, k in sources.items()}
+    stops = [(max(-90.0, min(90.0, _snap(p.lat))), _snap((p.lng + 180) % 360 - 180)) for p in req.path]
+    radius = round(req.radius_deg, 2)
+    stamp = sorted((v, f.name, f.stat().st_mtime) for v, f in files.items())
+    key = hashlib.sha1(json.dumps({"groove": GROOVE_VERSION, "period": req.time_period, "stops": stops,
+                                   "radius": radius, "ppb": req.points_per_bar, "_data": stamp,
+                                   "_v": API_VERSION}).encode()).hexdigest()[:16]
+    folder = CACHE_DIR / key
+    with lock_for(key):
+        audio = next((folder / f"score.{e}" for e in ("mp3", "wav") if (folder / f"score.{e}").exists()), None)
+        if not (audio and (folder / "score.json").exists() and (folder / "groove.json").exists()):
+            series = groove.groove_series(files, req.time_period, stops, radius)
+            if not series:
+                raise HTTPException(400, f"no data at {req.time_period} along this path "
+                                         f"for {sent or 'any dataset'} (see GET /api/instruments for the dates)")
+            folder.mkdir(parents=True, exist_ok=True)
+            lats, lngs = [s[0] for s in stops], [s[1] for s in stops]
+            la0, la1 = max(-90.0, min(lats) - radius), min(90.0, max(lats) + radius)
+            bbox = (la0, la1 if la1 > la0 else la0 + 1e-3, max(-180.0, min(lngs) - radius), min(180.0, max(lngs) + radius))
+            try:
+                orchestra.compose([], bbox=bbox, series_in=series, pitch_range="series",
+                                  frames_per_bar=req.points_per_bar,
+                                  bpm=60.0 * 4 / GROOVE_BAR_SECONDS, out_dir=folder, name="score",
+                                  render=True, audio_format="mp3", audio_engine="auto")
+            except orchestra.ComposeError as e:
+                raise HTTPException(400, str(e))
+            (folder / "score_preview.wav").unlink(missing_ok=True)
+            (folder / "groove.json").write_text(json.dumps(
+                {v: [None if not np.isfinite(x) else round(float(x), 4) for x in vals] for v, (vals, _) in series.items()}))
+            audio = next((folder / f"score.{e}" for e in ("mp3", "wav") if (folder / f"score.{e}").exists()), None)
+        if audio is None:
+            raise HTTPException(503, "audio rendering is not available on the server (see GET /api/health)")
+        score = json.loads((folder / "score.json").read_text())
+        values = json.loads((folder / "groove.json").read_text())
+    sent_id = {variable_of[d]: d for d in reversed(kept)}                 # variable -> the id the webapp used
+    id_of = lambda v: sent_id.get(v, SHORT_IDS.get(v, v))  # noqa: E731
+    playing = [v for v in score["instruments"] if v in values]
+    return {"zone_id": req.zone_id, "time_period": req.time_period,
+            "dataset_ids": [id_of(v) for v in playing],
+            "audio_data": base64.b64encode(audio.read_bytes()).decode("ascii"),
+            "duration_s": score["duration_s"], "bar_seconds": GROOVE_BAR_SECONDS,
+            "points_per_bar": req.points_per_bar, "stop_seconds": GROOVE_BAR_SECONDS / req.points_per_bar,
+            "radius_deg": radius,
+            "stops": [{"lat": la, "lng": lo, "values": {id_of(v): values[v][i] for v in playing}}
+                      for i, (la, lo) in enumerate(stops)]}
+
+
+# ----------------------------------------------------------------------------
+# Frontend contract: the whole monthly series of the selected points, for a chart (no audio).
+# ----------------------------------------------------------------------------
+class ZoneSeriesRequest(BaseModel):
+    zone_id: Optional[str] = Field(None, description="the frontend's id of the area; echoed back")
+    zone_name: Optional[str] = None
+    dataset_ids: list[str] = Field(min_length=1, description="dataset ids of GET /api/instruments")
+    points: Optional[list[SonifyPoint]] = Field(None, min_length=1, max_length=MAX_POINTS,
+                                                description="the selected points [{lat, lng}, ...]")
+    mask: Optional[str] = Field(None, description="the selected area as a compressed bitmap, instead of points "
+                                "(no size limit: see POST /api/zones/zone-data)")
+    aggregation: Literal["mean"] = Field("mean", description="how the points are combined: the area-weighted mean")
+
+    @model_validator(mode="after")
+    def _area_given(self):
+        if not self.points and not self.mask:
+            raise ValueError("send the selected points [{lat, lng}, ...] or a mask")
+        return self
+
+
+class _LRU:
+    """A small thread-safe least-recently-used cache."""
+
+    def __init__(self, size: int):
+        self.size, self.data, self.lock = size, OrderedDict(), threading.Lock()
+        self.hits = self.misses = 0
+
+    def get(self, key):
+        with self.lock:
+            if key in self.data:
+                self.data.move_to_end(key)
+                self.hits += 1
+                return self.data[key]
+            self.misses += 1
+            return None
+
+    def put(self, key, value):
+        with self.lock:
+            self.data[key] = value
+            self.data.move_to_end(key)
+            while len(self.data) > self.size:
+                self.data.popitem(last=False)
+
+
+SERIES_CACHE = _LRU(256)       # (sha1 of the cells, dataset, variable, file mtime) -> one entry of "series"
+
+
+def _month_index(t: str) -> int:
+    return int(t[:4]) * 12 + int(t[5:7]) - 1
+
+
+def monthly_values(mean, times) -> tuple[str, list]:
+    """Per-frame values -> ('YYYY-MM' of the first month, one value per month on a contiguous monthly axis).
+    Frames of the same month (daily data) are averaged; a month with no finite value is None."""
+    months = [str(t)[:7] for t in times]
+    i0 = min(map(_month_index, months))
+    n = max(map(_month_index, months)) - i0 + 1
+    sums, counts = np.zeros(n), np.zeros(n)
+    for m, v in zip(months, np.asarray(mean, dtype=np.float64)):
+        if np.isfinite(v):
+            sums[_month_index(m) - i0] += v
+            counts[_month_index(m) - i0] += 1
+    start = f"{i0 // 12:04d}-{i0 % 12 + 1:02d}"
+    return start, [round(float(s / c), 4) if c else None for s, c in zip(sums, counts)]
+
+
+def area_monthly_series(cells: list, digest: str, ds_id: str, var: str) -> Optional[dict]:
+    """One entry of the "series" of POST /api/zones/series (cached). None when the dataset has no time axis."""
+    g = scan_datasets()[ds_id]
+    path = g["file_of"][var]
+    key = (digest, ds_id, var, path.stat().st_mtime)
+    hit = SERIES_CACHE.get(key)
+    if hit is not None:
+        return hit
+    z, meta = orchestra.load_map(str(path))
+    with z:
+        if "time" not in z.files or not len(z["time"]):
+            return None
+        mean, _, times, _ = orchestra.area_series((z, meta), cells, POINT_GRID)
+        start, values = monthly_values(mean, times)
+    info = g["variables"][var]
+    entry = {"units": display_units(info), "anomaly": bool(info.get("anomaly")), "start": start,
+             # one map per year (night lights), repeated for its 12 months
+             "yearly": meta.get("source_time_step") == "1 year" or var == "nightlights",
+             "values": values}
+    SERIES_CACHE.put(key, entry)
+    return entry
+
+
+def series_dataset(var: str) -> Optional[str]:
+    """The dataset a chart of `var` is drawn from: the one covering the most MONTHS (a monthly series since
+    2000 rather than a daily one of a single year), real data first. With one dataset per variable (the
+    deployed server) this is the dataset POST /api/zones/zone-data plays."""
+    ds = scan_datasets()
+    holders = [k for k, g in ds.items() if var in g["variables"]]
+    return max(holders, key=lambda k: (bool(ds[k]["variables"][var].get("real")),
+                                       len({str(t)[:7] for t in ds[k].get("times") or []}), ds[k]["frames"]),
+               default=None)
+
+
+@app.post("/api/zones/series")
+def zone_series(req: ZoneSeriesRequest):
+    """The monthly series of each requested dataset over the selected points (the same area-weighted mean as
+    the `values` of POST /api/zones/zone-data), for a chart. Unknown ids are listed in `missing`."""
+    sent = list(dict.fromkeys(req.dataset_ids))
+    variable_of, kept = known_dataset_ids(sent)
+    cells = request_cells(req)
+    digest = hashlib.sha1(json.dumps(cells).encode()).hexdigest()
+    series, missing = {}, [d for d in sent if d not in kept]
+    for d in kept:
+        var = variable_of[d]
+        entry = area_monthly_series(cells, digest, series_dataset(var), var)
+        if entry is None:
+            missing.append(d)
+        else:
+            series[d] = entry
+    return {"zone_id": req.zone_id, "step": "month", "point_count": len(req.points) if req.points else len(cells),
+            "series": series,
+            "missing": missing}
 
 
 @app.post("/api/sonify/debug")

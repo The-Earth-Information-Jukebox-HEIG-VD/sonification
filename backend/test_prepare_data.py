@@ -246,12 +246,12 @@ def test_without_merge_mode_one_dataset_per_request(tmp_path):
 
 
 def test_deployed_api_is_only_what_the_frontend_uses(tmp_path):
-    """JUKEBOX_FULL_API=0 (the Docker image): GET /api/instruments, GET /api/genres, POST /api/sonify and /api/health,
-    nothing else."""
+    """JUKEBOX_FULL_API=0 (the Docker image): the frontend's calls (FRONTEND_PATHS) and /api/health, nothing else."""
     raw, cache = raw_like_the_datasets_repo(tmp_path), tmp_path / "cache"
     prepare(raw, cache / "_datasets")
     res = run_api(raw, cache, JUKEBOX_MERGE_DATASETS="1", JUKEBOX_FULL_API="0")
-    assert res["paths"] == ["/api/genres", "/api/health", "/api/instruments", "/api/sonify", "/api/zones/zone-data"]
+    assert res["paths"] == ["/api/genres", "/api/health", "/api/instruments", "/api/sonify", "/api/zones/groove",
+                            "/api/zones/series", "/api/zones/zone-data"]
     assert res["health"]["full_api"] is False
     assert res["compose_status"] == 404 and res["precip"]["status"] == 404          # no engine or debug endpoints
     # the frontend's call works and answers with exactly its seven fields; 30 s from 2001-01 = the 3 months left
