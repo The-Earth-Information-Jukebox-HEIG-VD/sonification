@@ -88,3 +88,5 @@ projects, which collected them from Freesound and SoundBible, and from OpenGameA
 The street-lamp hum and the heartbeat (temperature) are synthesised; the clock is a recording. The licences are those listed by Blanket and noixer; Freesound could not be
 reached to re-check them. The two CC BY sounds need a credit line wherever the audio is published (e.g. the webapp's
 about page).
+
+> AI assistance: Google Gemini and Anthropic Claude helped with research and writing for choosing the sounds and checking their licenses. See [AI assistance](../README.md#ai-assistance).

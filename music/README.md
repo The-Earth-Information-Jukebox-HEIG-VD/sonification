@@ -215,3 +215,5 @@ Demo pieces on the **real daily 2024 data** (`music/examples/daily/`): Switzerla
 Demo pieces on **real monthly data** (`music/examples/real/`): Switzerland 2022–24, El Niño 2015–17, global 2022–24, India 2021–23, each as `*_data` (default style) and `*_musical`.
 
 Good zones to try: `india` (monsoon violins, pre-monsoon dust flute, storm timpani), `sahara` (flute almost always: dust), `europe` (summer heat), `arctic`, `global`.
+
+> AI assistance: Google Gemini and Anthropic Claude helped with research, data analysis, coding and debugging, and writing for the composition pipeline. See [AI assistance](../README.md#ai-assistance).

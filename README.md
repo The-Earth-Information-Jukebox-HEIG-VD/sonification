@@ -85,3 +85,14 @@ One dataset per variable, one bar per month in all of them. **A request can mix 
 - `JUKEBOX_MERGE_DATASETS=0` goes back to one dataset per request (the default outside Docker).
 - `JUKEBOX_PREPARE=0` skips the conversion. `PORT` changes the port (default 8000).
 - The GitHub workflow publishes the image on a version tag: `git tag v0.1.0 && git push origin v0.1.0`.
+
+## AI assistance
+
+This music engine and its backend were developed with the help of AI assistants, Google Gemini and Anthropic Claude. In this repository they were used for:
+
+- **Research and information gathering:** sonification techniques, orchestral sample libraries and SoundFonts, and their licenses.
+- **Data analysis and interpretation:** choosing how each dataset's values map to pitch, loudness and tempo, and spotting problems in the input maps (such as the CO₂ outline pixels).
+- **Coding, debugging and troubleshooting:** the FastAPI backend, the composition engine (`music/`), audio rendering (sampler, SoundFont fallback, MP3 export) and the tests.
+- **Writing, editing and translating:** the API documentation (`backend/FRONTEND_API.md`, `backend/API.md`) and the READMEs.
+
+The team checked what the AI suggested and is responsible for the content of this repository. The music is composed by the team's own code from NASA data; no generative AI model creates the audio.
