@@ -270,6 +270,13 @@ All fields are optional. The smallest request is `{}` (global zone, default data
 
 ```
 
+### New in v2.5 (speed)
+- `mask` on `POST /api/zones/zone-data`, `/api/sonify` and `/api/zones/series`: the selected area as a zlib-compressed bitmap of the 0.1° point grid, instead of `points` (an ocean: ~3 kB instead of ~3 MB; `FRONTEND_API.md`, "mask"). Same cells, same music.
+- The mean of an area is kept in memory per (map file, area) (`orchestra.area_mean`, 512 entries): the next pieces of the same area no longer re-read the map's whole history. It is computed on the selected cells only (`zone_to_midi.zone_series`).
+- `build_monthly_dataset.py` writes uncompressed `.npz` (reading is ~7x faster, the files ~2x larger); `prepare_data.py` rebuilds the datasets once after the update.
+- Listing the datasets reads the array shapes from the file headers instead of loading every array (~360 MB less memory).
+- The reverb's hall response and its spectrum are computed once per process.
+
 ### New in v2.4 (chart data)
 - `POST /api/zones/series`: points + `dataset_ids` in, one value per month for each dataset out (`start`, `values` with `null` gaps, `units`, `anomaly`, `yearly`). The same area mean as the music (`orchestra.area_series`); cached in memory (256 areas x datasets). Served by the deployed backend too (`FRONTEND_API.md`, section 3).
 

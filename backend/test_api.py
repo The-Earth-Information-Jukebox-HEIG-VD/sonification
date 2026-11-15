@@ -273,6 +273,94 @@ def test_zone_series():
     assert client.post("/api/zones/series", json={**body, "points": [{"lat": 0, "lng": 0}] * 20001}).status_code == 422
 
 
+def _mask_of(points) -> str:
+    """What the webapp sends as `mask`: the 0.1 degree cell of each point, packed, zlib, base64."""
+    import base64, zlib
+    import numpy as np
+    import backend.app as api
+    grid = np.zeros(api.POINT_GRID, dtype=bool)
+    for r, c in api.points_to_cells([api.SonifyPoint(**p) for p in points]):
+        grid[r, c] = True
+    return base64.b64encode(zlib.compress(np.packbits(grid).tobytes())).decode()
+
+
+def test_mask_same_as_points():
+    """`mask` (compressed bitmap) selects exactly the cells of the points: same music, same chart."""
+    import base64, zlib
+    import backend.app as api
+    # a big zone (an ocean is ~57 000 points, 3 MB of JSON) and a small one
+    big = [{"lat": la / 2, "lng": lo / 2 - 180} for la in range(-20, 21) for lo in range(300, 400)]
+    small = [{"lat": 48.8566, "lng": 2.3522}, {"lat": 46.5, "lng": 6.6}]
+    for pts in (big, small):
+        mask = _mask_of(pts)
+        assert api.mask_to_cells(mask) == api.points_to_cells([api.SonifyPoint(**p) for p in pts])
+        base = {"zone_id": "z", "dataset_ids": ["temperature"], "time_period": "2015-01"}
+        a = client.post("/api/zones/zone-data", json={**base, "points": pts}).json()
+        b = client.post("/api/zones/zone-data", json={**base, "mask": mask}).json()
+        assert a["values"] == b["values"] and a["next_time_period"] == b["next_time_period"]
+        assert b["point_count"] == len(api.points_to_cells([api.SonifyPoint(**p) for p in pts]))
+        sa = client.post("/api/zones/series", json={"dataset_ids": ["temperature"], "points": pts}).json()
+        sb = client.post("/api/zones/series", json={"dataset_ids": ["temperature"], "mask": mask}).json()
+        assert sa["series"] == sb["series"]
+    assert len(_mask_of(big)) < 5000                       # a few kB instead of the points' ~200 kB
+    # more than MAX_POINTS points: refused as points, accepted as a mask
+    many = [{"lat": la / 10, "lng": lo / 10} for la in range(0, 150) for lo in range(0, 150)]
+    body = {"dataset_ids": ["temperature"]}
+    assert client.post("/api/zones/series", json={**body, "points": many}).status_code == 422
+    assert client.post("/api/zones/series", json={**body, "mask": _mask_of(many)}).status_code == 200
+    # malformed masks
+    bomb = base64.b64encode(zlib.compress(bytes(api.MASK_BYTES * 4))).decode()      # inflates past the grid
+    empty = base64.b64encode(zlib.compress(bytes(api.MASK_BYTES))).decode()
+    for bad in ("not base64!", base64.b64encode(b"not zlib").decode(), bomb, empty,
+                base64.b64encode(zlib.compress(bytes(10))).decode()):
+        assert client.post("/api/zones/zone-data", json={"dataset_ids": ["temperature"], "mask": bad}).status_code == 422
+        assert client.post("/api/zones/series", json={**body, "mask": bad}).status_code == 422
+    assert client.post("/api/zones/series", json=body).status_code == 422          # neither points nor mask
+
+
+def test_zone_series_vectorized_and_area_cache():
+    """zone_to_midi.zone_series (selected cells only, in blocks) = the former per-frame loop; orchestra caches
+    the area mean per (file, mask) and hands out a read-only array."""
+    import numpy as np
+    root = Path(__file__).resolve().parent.parent
+    sys.path.insert(0, str(root / "music"))
+    import orchestra
+    import zone_to_midi as zm
+
+    def per_frame(field, lat, mask):                       # the former implementation
+        w = np.where(mask, np.cos(np.deg2rad(lat))[:, None] * np.ones(field.shape[1:]), 0.0)
+        out = []
+        for f in field:
+            ww = np.where(np.isnan(f), 0.0, w)
+            out.append(np.nansum(f * ww) / ww.sum() if ww.sum() else np.nan)
+        return np.array(out)
+
+    rng = np.random.default_rng(0)
+    field = rng.normal(size=(40, 20, 30)).astype(np.float32)
+    field[rng.random(field.shape) < 0.3] = np.nan
+    field[5] = np.nan                                      # a frame with no value at all
+    lat, mask = np.linspace(-85, 85, 20), rng.random((20, 30)) < 0.4
+    block = zm.ZONE_BLOCK
+    try:
+        zm.ZONE_BLOCK = 100                                # several blocks of frames
+        m, _ = zm.zone_series(field, lat, mask)
+    finally:
+        zm.ZONE_BLOCK = block
+    ref = per_frame(field, lat, mask)
+    assert np.array_equal(np.isnan(m), np.isnan(ref)) and np.nanmax(np.abs(m - ref)) < 1e-12
+
+    files = sorted(Path(os.environ.get("JUKEBOX_DATA_DIR", root / "simulation" / "output")).glob("*.npz"))
+    assert files, "generate data first"
+    z, _ = orchestra.load_map(str(files[0]))
+    sel = np.zeros((len(z["lat"]), len(z["lon"])), dtype=bool)
+    sel[len(z["lat"]) // 3: len(z["lat"]) // 2, : len(z["lon"]) // 4] = True
+    first = orchestra.area_mean(z, sel)
+    again = orchestra.area_mean(orchestra.load_map(str(files[0]))[0], sel.copy())
+    assert again is first and not first.flags.writeable
+    other = sel.copy(); other[0, 0] = not other[0, 0]
+    assert orchestra.area_mean(z, other) is not first
+
+
 def test_sonify_debug_details():
     """POST /api/sonify/debug (development only): the same chunk with the engine's knobs and every detail."""
     body = {"zone_id": "france", "dataset_id": "temperature", "time_period": "2024-03",

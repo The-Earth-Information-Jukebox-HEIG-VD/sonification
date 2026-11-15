@@ -351,8 +351,10 @@ def main():
         if a.frames_per_bar:
             meta["frames_per_bar"] = a.frames_per_bar
         intensity = np.clip((data - vmin) / (vmax - vmin), 0, 1).astype(np.float16)     # float16: halves the size
-        np.savez_compressed(out / f"{prefix}_{var}.npz", data=data.astype(np.float32), intensity=intensity,
-                            lat=lat, lon=lon, time=times, land_fraction=land, n_days=np.array(days, dtype=np.uint8))
+        # NOT compressed: the backend reads the whole `data` array for every new zone, and inflating it took
+        # ~7x longer than reading it (0.43 s vs 0.06 s for the seven datasets). Costs ~2x the disk space.
+        np.savez(out / f"{prefix}_{var}.npz", data=data.astype(np.float32), intensity=intensity,
+                 lat=lat, lon=lon, time=times, land_fraction=land, n_days=np.array(days, dtype=np.uint8))
         (out / f"{prefix}_{var}.json").write_text(json.dumps(meta, indent=2))
         size = (out / f"{prefix}_{var}.npz").stat().st_size / 1e6
         w = np.cos(np.deg2rad(lat))[:, None] * np.ones((1, len(lon)))
