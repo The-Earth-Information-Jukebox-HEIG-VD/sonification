@@ -110,6 +110,55 @@ Without a CO₂ map, temperature picks the chords (`--harmony surface_temperatur
 On real data the climaxes land on real events: Switzerland → Feb 2024 (record-warm winter), El Niño region → Nov 2015, global → Sep 2023 (record month), India → spring 2022 heatwave.
 Options: `compose(..., intro=True, tension=True, climax=True, humanize=0.5)`.
 
+## 5. Genres and the realistic mode (`--genre`)
+`compose(..., genre=...)` (API: `"genre"`) plays the **whole piece in one style**, so the instruments stay the same
+and are easy to recognise: `orchestra` (default), `ragtime`, `swing`, `rocknroll`, `funk`, `synthpop`, `house`,
+`trap`, or `realistic`. The styles are the ones of the table below (`music/eras.py`); each has its usual tempo when
+no `bpm` is given (orchestra and realistic 76, ragtime 96, swing 126, rock'n'roll 150, funk 112, synth-pop 116,
+house 124, trap 140). Same data notes on the same beats in every genre; the instrument names in the score follow
+the genre (`"Rain - Tenor sax"`).
+
+**`realistic`** (`music/soundscape.py`): no instruments, the sound of each phenomenon, mixed from real recordings:
+rain (+ a downpour layer when it pours), snowy wind, campfire (+ fireplace and a low roar for big fires), real
+thunderclaps (claps per beat = lightning activity), a heartbeat for the temperature (one lub-dub per beat: the tempo follows the temperature, 60 bpm when cold to 130 bpm when hot, louder when hot; synthesised), city traffic for CO₂, the 50 Hz hum
+of street lamps for night lights (synthesised). Levels measured per layer (about −27 dBFS for the temperature bed,
+−18 to −25 when a phenomenon is strong). The recordings (CC0 / public domain / CC BY, ~30 MB) are downloaded once
+from GitHub at pinned commits: `python music/soundscape.py --download` (credits: `soundfonts/README.md`).
+
+Examples (`music/examples/genres/`): the same data, Switzerland 2017–2018, in all 9 genres
+(`switzerland_2017_2018_<genre>.mp3`, measured within 3.5 dB of each other), and Australia's 2019–20 fires in
+`realistic` and `rocknroll`.
+```bash
+O=simulation/output; python music/orchestra.py $O/real_temperature_1880_2025_ $O/real_precipitation_2000_2026_ \
+    $O/real_snow_2000_2026_ $O/real_fires_2002_2026_ --zone switzerland --start 2017-01 --end 2018-12 --genre rocknroll --render --mp3
+```
+
+**The temperature sets the tempo** (every genre, data style, default; `--fixed-tempo` / `"tempo_from_temperature": false` to turn it off): each bar's tempo = the genre's tempo x (0.75 + 0.5 t), t = the bar's mean temperature on the 5th..95th percentile of the whole series of the area (robust: a few extreme months do not squeeze the others into the middle), so the same temperature is the same tempo in every piece. In `realistic`, the heartbeat goes from 60 to 130 bpm. The MIDI has a tempo change on each bar; `score.tempo_map` and `score.tempo_range` give them. With `duration_s`, the number of bars is chosen with these tempos and the whole map is nudged to last exactly `duration_s`: 30 s covers 11 bars of 2023 against 9 of 1900 in Switzerland (orchestra), 16 against 10 worldwide (realistic: the heart beats at about 127 bpm in 2023, 64–90 in 1900).
+
+## 6. Music through the ages (fun mode, `--eras`)
+`compose(..., eras=True)` (API: `"eras": true`) plays each bar in the style of its **date**, so a long timeline goes from a Romantic orchestra in 1880 to trap in 2026:
+
+| from | era | chords (temperature) | bass (CO₂) | melodies (rain …) | drums (GS kit) |
+|---|---|---|---|---|---|
+| — | Romantic orchestra | the orchestra, unchanged (VSCO samples) | | | none |
+| 1910 | Ragtime & early jazz | honky-tonk **stride** (low on 1-3, chord on 2-4) | tuba on 1 and 3 | clarinet | Brush |
+| 1930 | Swing & big band | jazz guitar, short chord + 7th on every beat | **walking** (data note on 1, then up the chord, then a step into the next bar) | trumpet | Jazz: ride, hi-hat on 2-4, swing 2:1 |
+| 1950 | Rock'n'roll | clean guitar eighths | eighths | tenor sax | Standard: backbeat, light shuffle |
+| 1965 | Rock, funk & disco | clavinet stabs | disco octaves | overdriven guitar | Power: four-on-the-floor, open hats |
+| 1980 | Synth-pop | polysynth pad | synth bass eighths | square lead | Electronic |
+| 1995 | House & electronic | piano stabs on the off-beats | off-beat synth bass | saw lead | Dance |
+| 2010 | Modern pop & trap | electric-piano arpeggio | one long **808** per bar | bass+lead synth | 808/909: half-time snare, hi-hat rolls when hot |
+
+- **What stays the data:** every chord root, bass note and melody note is the one data style chose, at the moment it chose it; velocities come from the data notes. A style only changes the instrument, the rhythm that repeats the note, and swing. The walking bass and the stride left hand add passing notes between data notes.
+- **What is added:** a drum kit per era, louder and busier when the temperature is high (energy = the piano's presence per bar), a crash and a snare fill at each era change.
+- **Sound:** the Romantic bars stay on the orchestra's channels (VSCO samples). The other eras play on free MIDI channels with a program change at each boundary, rendered with the GeneralUser GS SoundFont (a channel that changes program is never sent to VSCO). Each era has a `gain` so the very different GM sounds stay at a similar loudness (measured: −26 dB in the Romantic part, −29 in ragtime, rising to about −21 for house and trap).
+- Night lights keep their synth pad in every era. No anomaly markers in this mode. Data style only.
+- Examples (`music/examples/eras/`), all on the team's data: global and Switzerland 1880–2025 (one bar = 2 years, about 3 min: about 20–35 s per era; the whole band joins from 2000), Australia and Switzerland 2000–2025 (one bar = 4 months: house then trap with every instrument; Australia's 2019–20 fires, Swiss snow every winter), India 2004–2017.
+```bash
+O=simulation/output; python music/orchestra.py $O/real_temperature_1880_2025_ $O/real_precipitation_2000_2026_ $O/real_snow_2000_2026_ $O/real_fires_2002_2026_ \
+    $O/real_lightning_2017_2023_ $O/real_nightlights_2012_2023_ $O/real_co2_2002_2022_ --zone global --frames-per-bar 24 --bpm 100 --eras --render --mp3
+```
+
 ## 4. Regional palettes (fun mode)
 `--palette auto` swaps in traditional instruments for the zone. The roles, registers and timing stay the same; only the band changes (plus a matching default mode, unless you pass `--scale`).
 ```bash

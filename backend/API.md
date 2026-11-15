@@ -269,6 +269,24 @@ All fields are optional. The smallest request is `{}` (global zone, default data
 
 ```
 
+### New in v2.6 (the temperature sets the tempo)
+- data style, every genre, by default: each bar's tempo follows the temperature of the bar (x0.75 cold .. x1.25 hot around the genre's tempo, on the 5th..95th percentile of the area's whole series); in `realistic` the temperature is a **heartbeat** of 60 to 130 bpm (it replaces the birdsong). `"tempo_from_temperature": false` gives one fixed tempo (`POST /api/compose`).
+- `duration_s` is still exact: the number of bars is chosen with the bar tempos, so a 30 s chunk covers about 8 to 13 months (10 at an average temperature). Always use `next_time_period`.
+- `score.tempo_map` has one entry per tempo change, `score.tempo_range` the slowest and fastest, `score.tempo_from_temperature` says whether it was used. `score.bpm` is the genre's reference tempo (the heart's median rate in `realistic`).
+
+### New in v2.5 (genres and a realistic mode)
+- new `genre` in `POST /api/compose`, `POST /api/sonify` and `POST /api/zones/zone-data`: `orchestra` (default), `ragtime`, `swing`, `rocknroll`, `funk`, `synthpop`, `house`, `trap` (one instrument set and groove for the whole piece, `music/eras.py`) or `realistic` (recordings of rain, fire, thunder, a heartbeat, traffic, lamp hum; `music/soundscape.py`). Aliases: `jazz`, `rock`, `disco`, `electro`, `pop`, `classical`. Data style only; not together with `eras`.
+- `bpm` is now optional: the genre's usual tempo when not sent (76 for the orchestra and the realistic mode).
+- new `GET /api/genres` (also served by the deployed image) and `GET /api/instruments?genre=...` (the instrument of each dataset in that genre; without `?genre=` the answer is unchanged).
+- `score.genre`; instrument names follow the genre (`"Temperature - Clean electric guitar (eighth notes)"`, `"Rain - Rain sounds"`). `/api/sonify` and `/api/zones/zone-data` answer with `genre` when it was sent.
+- `GET /api/health`: `realistic_sounds` (the recordings are installed: `python music/soundscape.py --download`, done in the Docker image).
+
+### New in v2.4 (music through the ages)
+- new boolean `eras` (default `false`) in `POST /api/compose`, `POST /api/sonify` and `POST /api/zones/zone-data`: each bar is played in the musical style of its date, from a Romantic orchestra before 1910 to modern pop / trap from 2010 (8 eras, see `music/eras.py` and `FRONTEND_API.md`). Data style only (`400` with `style: musical`).
+- pitch and loudness are still the data's; the instruments, the comping rhythm (stride piano, walking bass, funk clavinet, house off-beats, 808), swing and a drum kit change with the era. No anomaly markers in this mode (the drum kit uses the percussion channel).
+- `score.eras`: `[{key, name, start_bar, bars, start_s, time}]`; `score.bars[i].era`; an extra instrument `era_drums`.
+- `/api/sonify` and `/api/zones/zone-data` answer with `era` (the era at the start) and `eras` when `eras` is true.
+
 ### New in v2.3 (instruments after a listening test)
 - lightning: **timpani** (was a xylophone, too close to the snow's glockenspiel).
 - fires: **trombones that swell and hold**, below the piano (was a melody in the piano's register).

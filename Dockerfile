@@ -46,6 +46,10 @@ COPY soundfonts/ soundfonts/
 RUN python music/render_audio.py --download \
     && test -s soundfonts/GeneralUser-GS.sf2
 
+# the recordings of the realistic mode (rain, fire, thunder, crickets ...; CC0 / public domain / CC BY, ~30 MB)
+RUN python music/soundscape.py --download \
+    && test -s soundfonts/ambience/rain_light.flac
+
 ARG WITH_VSCO=0
 RUN if [ "$WITH_VSCO" = "1" ]; then \
         python music/sampler.py --download \

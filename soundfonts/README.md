@@ -61,3 +61,23 @@ python music/render_audio.py music/output/orchestra_india_all.mid --reverb 0.3
 | VCSL (Versilian Community Sample Library) | SFZ + WAV | CC0 | keys, percussion, world instruments |
 
 Web player options: **SpessaSynth** (plays the same `.sf2` in the browser, so web and Python sound identical) or **smplr** (Web Audio sampler with soundfont instruments and a sampled Steinway).
+
+## Realistic mode: recordings of rain, fire, thunder ... (`soundfonts/ambience/`)
+`python music/soundscape.py --download` (done in the Docker image) fetches 7 free recordings from GitHub at pinned
+commits and prepares 12 clips (seamless loops, 5 thunderclaps cut from a storm, matched levels), about 30 MB. Not in
+git. Sources: the [Blanket](https://github.com/rafaelmardojai/blanket) and [noixer](https://github.com/abetusk/noixer)
+projects, which collected them from Freesound and SoundBible, and from OpenGameArt for the clock:
+
+| clip | recording | license |
+|---|---|---|
+| rain_light | Rain by alex36917 (freesound.org/s/524605), edited for Blanket | **CC BY**: credit the author |
+| rain_heavy, thunder_1..5 | Spring night rain 2 by ali@k (freesound.org/s/156049) | CC0 |
+| fire_camp | Campfire by cagancelik (freesound.org/s/433783) | CC0 |
+| fire_place | Fireplace by ezwa (soundbible.com/1543) | Public domain |
+| wind | Wind by felix.blume (freesound.org/s/217506), edited for Blanket | CC0 |
+| city | City by gezortenplotz (freesound.org/s/44796), edited for Blanket | **CC BY**: credit the author |
+| tick_1..11 | Ticking clock by bart ([opengameart.org/content/ticking-clock](https://opengameart.org/content/ticking-clock)): 4 single ticks + 7 cut from the loop (`temperature_sound: clock`) | CC0 |
+
+The street-lamp hum and the heartbeat (temperature) are synthesised; the clock is a recording. The licences are those listed by Blanket and noixer; Freesound could not be
+reached to re-check them. The two CC BY sounds need a credit line wherever the audio is published (e.g. the webapp's
+about page).

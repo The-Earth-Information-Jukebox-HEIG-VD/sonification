@@ -20,8 +20,8 @@ FULL = max((k for k in _ds if {"surface_temperature", "co2"} <= set(_ds[k]["vari
            key=lambda k: (len(_ds[k]["real_variables"]), len(_ds[k]["variables"]), _ds[k]["frames"]), default=None)
 REAL_MONTHLY = next((k for k in _ds if k.startswith("real_monthly") and "precipitation" in _ds[k]["variables"]), None)
 # the team's temperature anomaly 1880 -> 2025 (python simulation/build_monthly_dataset.py --temperature DIR --res 2)
-TEMP_HISTORY = next((k for k in _ds if k.startswith("real_monthly") and
-                     _ds[k]["variables"].get("surface_temperature", {}).get("anomaly")), None)
+TEMP_HISTORY = next((k for k in _ds if _ds[k]["variables"].get("surface_temperature", {}).get("anomaly")
+                     and _ds[k]["time_start"].startswith("1880")), None)
 
 
 def test_health():
@@ -130,7 +130,8 @@ def test_single_date_and_duration():
     ds = {d["id"]: d for d in client.get("/api/datasets").json()["datasets"]}
     if "sim_both_24f_1deg" not in ds:
         print("skip: no simulated dataset (python simulation/simulate_variables.py ...)"); return
-    base = {"dataset": "sim_both_24f_1deg", "zone": "europe", "audio": False, "variables": ["surface_temperature"]}
+    base = {"dataset": "sim_both_24f_1deg", "zone": "europe", "audio": False, "variables": ["surface_temperature"],
+            "tempo_from_temperature": False}           # one fixed tempo here; the temperature tempo is checked at the end
     # one date as numbers + a length in seconds: 30 s from March 2024
     r = client.post("/api/compose", json={**base, "year": 2024, "month": 3, "duration_s": 30})
     assert r.status_code == 200, r.text
@@ -164,6 +165,11 @@ def test_single_date_and_duration():
     # a date before the data starts at the first frame (score.time_start says where)
     s = client.post("/api/compose", json={**base, "year": 1990, "duration_s": 30}).json()["score"]
     assert s["time_start"].startswith("2024-01") and s["n_bars"] == 10
+    # the temperature sets the tempo (the default): one tempo per bar, still exactly 30 s
+    s = client.post("/api/compose", json={**base, "tempo_from_temperature": True, "year": 2024, "month": 3,
+                                          "duration_s": 30}).json()["score"]
+    assert s["tempo_from_temperature"] and abs(s["duration_s"] - 30) < 0.05 and len(s["tempo_map"]) > 1
+    assert 76 * 0.7 <= s["tempo_range"][0] <= s["tempo_range"][1] <= 76 * 1.35
 
 
 def test_instruments_list():
@@ -315,9 +321,9 @@ def test_temperature_anomaly_history():
         print("skip: no temperature anomaly dataset (build_monthly_dataset.py --temperature DIR)"); return
     d = _ds[TEMP_HISTORY]
     assert d["time_start"].startswith("1880-01") and d["variables"]["surface_temperature"]["real"]
-    # one bar per year by default; the global warming trend climbs in pitch and the last bars ring hot
+    # one bar per year; the global warming trend climbs in pitch and the last bars ring hot
     s = client.post("/api/compose", json={"dataset": TEMP_HISTORY, "zone": "global", "start": "1880-01",
-                                          "end": "2025-12", "audio": False}).json()["score"]
+                                          "end": "2025-12", "frames_per_bar": 12, "audio": False}).json()["score"]
     t = s["instruments"]["surface_temperature"]
     assert s["frames_per_bar"] == 12 and s["n_bars"] == 146 and t["anomaly"] is True
     v = [x for x in t["values_per_beat"] if x is not None]
@@ -329,6 +335,82 @@ def test_temperature_anomaly_history():
     j = client.post("/api/sonify/debug", json={"zone_id": "switzerland", "dataset_id": "temperature",
                                                "time_period": "1950", "embed_audio": False, "duration_s": 8}).json()
     assert j["source_dataset"] == TEMP_HISTORY and j["anomaly"] is True and j["time_period"].startswith("1950")
+
+
+def test_eras_mode():
+    """Fun mode: the date picks the music. Same data notes, other instruments, a drum kit per era."""
+    if not TEMP_HISTORY:
+        print("skip: no temperature anomaly dataset"); return
+    base = {"dataset": TEMP_HISTORY, "zone": "global", "start": "1880-01", "end": "2025-12", "frames_per_bar": 12,
+            "audio": False}
+    plain = client.post("/api/compose", json=base).json()["score"]
+    s = client.post("/api/compose", json={**base, "eras": True}).json()["score"]
+    names = [e["name"] for e in s["eras"]]
+    assert names[0] == "Romantic orchestra" and names[-1] == "Modern pop & trap" and len(names) == 8
+    assert [e["time"][:4] for e in s["eras"]][:3] == ["1880", "1910", "1930"]
+    assert s["bars"][0]["era"] == "orchestra" and s["bars"][-1]["era"] == "trap"
+    assert "era_drums" in s["instruments"] and plain.get("eras") is None and "era_drums" not in plain["instruments"]
+    # the Romantic bars are the plain piece, note for note; later bars keep the data's chord roots on the downbeats
+    t, t0 = s["instruments"]["surface_temperature"]["notes"], plain["instruments"]["surface_temperature"]["notes"]
+    first = lambda notes, b0, b1: sorted((n["pitch"], n["start"]) for n in notes if b0 * 4 <= n["start"] < b1 * 4)  # noqa
+    assert first(t, 0, 30) == first(t0, 0, 30)
+    swing_bar = next(e["start_bar"] for e in s["eras"] if e["name"].startswith("Swing"))
+    lowest = lambda notes, b: min(n["pitch"] for n in notes if n["start"] == b * 4)  # noqa: E731
+    assert lowest(t, swing_bar) == lowest(t0, swing_bar)
+    # no drums in the Romantic orchestra
+    assert min(n["start"] for n in s["instruments"]["era_drums"]["notes"]) >= 30 * 4
+    # the frontend's call: one flag, the era comes back
+    j = client.post("/api/sonify", json={"zone_id": "switzerland", "dataset_id": "temperature", "time_period": "1985-01",
+                                         "eras": True}).json()
+    if "audio_data" in j:          # needs audio rendering on the server
+        assert j["era"] == "Synth-pop" and j["eras"][0]["name"] == "Synth-pop"
+    off = client.post("/api/sonify", json={"zone_id": "switzerland", "dataset_id": "temperature", "time_period": "1985-01"})
+    assert "era" not in off.json()
+    # only in data style
+    r = client.post("/api/compose", json={**base, "eras": True, "style": "musical"})
+    assert r.status_code == 400 and "eras" in r.json()["detail"]
+
+
+def test_genres():
+    """One genre for the whole piece; the instrument list follows the genre; realistic = recordings."""
+    g = client.get("/api/genres").json()
+    assert g["default"] == "orchestra" and [x["id"] for x in g["genres"]] == [
+        "orchestra", "ragtime", "swing", "rocknroll", "funk", "synthpop", "house", "trap", "realistic"]
+    assert all(x["name"] and x["description"] and x["bpm"] for x in g["genres"])
+    j = client.get("/api/instruments?genre=rocknroll").json()
+    assert j["genre"] == "rocknroll" and "guitar" in j["by_dataset"]["temperature"].lower()
+    assert client.get("/api/instruments").json()["by_dataset"]["temperature"] == "Piano (chords)"
+    assert "Heartbeat" in client.get("/api/instruments?genre=realistic").json()["by_dataset"]["temperature"]
+    assert client.get("/api/instruments?genre=polka").status_code == 400
+    if not TEMP_HISTORY:
+        print("skip: no temperature anomaly dataset"); return
+    base = {"dataset": TEMP_HISTORY, "zone": "global", "start": "2000-01", "end": "2009-12", "frames_per_bar": 12,
+            "audio": False}
+    s = client.post("/api/compose", json={**base, "genre": "rock'n'roll"}).json()["score"]
+    assert s["genre"] == "rocknroll" and s["bpm"] == 150 and s["eras"] is None
+    assert s["instruments"]["surface_temperature"]["name"].startswith("Temperature - Clean electric guitar")
+    drums = s["instruments"]["era_drums"]["notes"]
+    assert min(n["start"] for n in drums) == 0                            # the band plays from the first bar
+    plain = client.post("/api/compose", json=base).json()["score"]
+    lowest = lambda notes, b: min(n["pitch"] for n in notes if n["start"] == b * 4)  # noqa: E731
+    for b in range(10):                                                    # same data note on each downbeat
+        assert lowest(s["instruments"]["surface_temperature"]["notes"], b) == \
+            lowest(plain["instruments"]["surface_temperature"]["notes"], b)
+    r = client.post("/api/compose", json={**base, "genre": "house", "style": "musical"})
+    assert r.status_code == 400
+    r = client.post("/api/compose", json={**base, "genre": "house", "eras": True})
+    assert r.status_code == 400 and "either" in r.json()["detail"]
+    # realistic: recordings instead of instruments
+    s = client.post("/api/compose", json={**base, "genre": "realistic", "end": "2001-12", "frames_per_bar": 1,
+                                          "audio": True}).json()
+    assert s["score"]["genre"] == "realistic" and 55 <= s["score"]["tempo_range"][0] <= s["score"]["tempo_range"][1] <= 135
+    assert s["score"]["instruments"]["surface_temperature"]["name"].startswith("Temperature - Heartbeat")
+    if client.get("/api/health").json().get("realistic_sounds"):
+        assert s["files"]["audio"]
+    # the frontend's call: an alias works and the genre comes back
+    j = client.post("/api/sonify", json={"zone_id": "switzerland", "dataset_id": "temperature", "time_period": "2001-01",
+                                         "genre": "jazz"}).json()
+    assert j.get("genre") == "swing" or "detail" in j
 
 
 def test_real_daily_precipitation():

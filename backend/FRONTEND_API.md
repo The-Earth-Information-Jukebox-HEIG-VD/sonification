@@ -79,8 +79,69 @@ Response: `zone_id`, `dataset_id`, `time_period`, `next_time_period`, `audio_dat
 | `value` / `values` | the mean of each dataset over the points at `time_period`, in the units of `/api/instruments` |
 | `point_count` | the number of points received |
 
+### Optional: a musical genre (`"genre": "rocknroll"`)
+Add `"genre"` to either call to hear the whole piece in one style. The instrument set stays the same from the
+first bar to the last, so listeners can learn which instrument is which dataset. Without it: the orchestra.
+
+`GET /api/genres` lists them for a menu (`{"default": "orchestra", "genres": [{id, name, bpm, description}]}`):
+
+| `genre` | sound |
+|---|---|
+| `orchestra` | the orchestra (default) |
+| `ragtime` | honky-tonk stride piano, tuba, clarinet, brushes |
+| `swing` | jazz guitar, walking bass, trumpet, vibraphone, ride cymbal |
+| `rocknroll` | electric guitar, electric bass, tenor sax, backbeat drums |
+| `funk` | clavinet, octave bass, overdriven guitar, Hammond organ, disco drums |
+| `synthpop` | polysynth, synth bass, square lead, synth brass, drum machine |
+| `house` | off-beat piano and bass, saw lead, four-on-the-floor |
+| `trap` | electric-piano arpeggios, 808 bass, synth lead, hi-hat rolls |
+| `realistic` | **no instruments: the sound of each phenomenon** (below) |
+
+Aliases are accepted (`jazz`, `rock`, `disco`, `electro`, `pop`, `classical`). `GET /api/instruments?genre=rocknroll`
+gives the instrument of each dataset in that genre (without `?genre=` the answer is unchanged). The answer of the call
+gets `"genre": "rocknroll"`.
+
+- **Tempo**: each genre has its usual tempo (orchestra and realistic 76 bpm, rock'n'roll 150, house 124 ...). A chunk is
+  still 30 seconds, so it covers more months in a fast genre (19 months in rock'n'roll instead of 10): always use
+  `next_time_period`.
+- **The data is the same in every genre**: the same notes on the same beats; the genre changes the instruments, the
+  rhythm they repeat the notes in, and adds drums (louder in hot periods).
+
+**`realistic`**: every dataset is heard as what it is, from real recordings (free licences, see `soundfonts/README.md`):
+
+| dataset | sound | what follows the data |
+|---|---|---|
+| precipitation | rain, plus a downpour layer | loudness = amount of rain |
+| snow | soft airy wind | loudness = amount of snow |
+| fires | campfire, plus a fireplace and a low roar for big fires | loudness and size = number of fire days |
+| lightning | real thunderclaps | how often = lightning activity |
+| temperature | a heartbeat, the "pulse of the planet" (synthesised) | it beats on every beat of the tempo: 60 bpm (a heart at rest) when cold, up to 130 bpm when hot; louder too |
+| co2 | city traffic | loudness = CO₂ level |
+| night_lights | the 50 Hz hum of street lamps | loudness = brightness |
+
+### Optional: music through the ages (`"eras": true`)
+A fun mode, off by default. Add `"eras": true` to either call and the music takes the style of its date:
+
+| from | era | sound |
+|---|---|---|
+| 1880 | Romantic orchestra | the normal orchestra, no drums |
+| 1910 | Ragtime & early jazz | honky-tonk stride piano, tuba, clarinet, brushes |
+| 1930 | Swing & big band | jazz guitar, walking bass, trumpet, ride cymbal, swung eighths |
+| 1950 | Rock'n'roll | electric guitar, bass, tenor sax, backbeat |
+| 1965 | Rock, funk & disco | clavinet, octave bass, overdriven guitar, disco hi-hats |
+| 1980 | Synth-pop | polysynth, synth bass, square lead, drum machine |
+| 1995 | House & electronic | off-beat piano and bass, saw lead, four-on-the-floor |
+| 2010 | Modern pop & trap | electric-piano arpeggios, 808 bass, hi-hat rolls |
+
+The data still decides every pitch and loudness; the drums hit harder in hot years. The answer gets two extra fields:
+```json
+{"era": "Synth-pop", "eras": [{"name": "Synth-pop", "time_period": "1985-01", "start_s": 0.0}]}
+```
+`era` is the era at the start of the chunk; `eras` lists every era of the chunk with the second it starts (one
+chunk can cross a boundary, e.g. 1905-1914). Without `"eras": true` nothing changes, and these fields are absent.
+
 ### What to expect
-- **30 seconds is 10 months**: one bar of music per month. The next period after `2015-01` is `2015-11`, not `2015-02`: use `next_time_period`, do not add one month yourself.
+- **The temperature sets the tempo**: each bar (one month) is faster when it is hotter (from 0.75x to 1.25x the genre's tempo; a heartbeat of 60 to 130 bpm in `realistic`), on a scale of the whole series of the area, so the same temperature is the same tempo in every chunk. A chunk is still 30 seconds, so **30 seconds is about 8 to 13 months** (10 at an average temperature): a hot period goes by faster. The next period after `2015-01` is about `2015-11`, not `2015-02`: always use `next_time_period`, do not add one month yourself.
 - **`time_period` in the answer is where the music really starts.** It differs from the request only when you ask for a date before the first data.
 - **Several datasets**: each instrument plays where its own data exists and is silent elsewhere (temperature and precipitation from 1999: the violins come in in June 2000).
 - **Yearly data** (`night_lights`): the value is the year's. The synth pad starts clearly each January, when the value changes, then fades slowly over the year to a softer background note.

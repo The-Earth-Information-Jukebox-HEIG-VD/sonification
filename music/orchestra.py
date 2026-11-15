@@ -753,7 +753,7 @@ def ending(parts, n_bars, bpb, key_pc, scale):
 # ----------------------------------------------------------------------------
 # Preview: score lanes + stereo synth
 # ----------------------------------------------------------------------------
-COLORS = {"markers": "#e07a5f", "melody": "#d1495b", "rhythm": "#00798c", "harmony": "#8f6593",
+COLORS = {"drums": "#6c757d", "markers": "#e07a5f", "melody": "#d1495b", "rhythm": "#00798c", "harmony": "#8f6593",
           "swell": "#edae49", "timpani": "#3d3d3d", "bass": "#30638e"}
 
 
@@ -794,6 +794,9 @@ def score_png(parts, harmony, total_beats, bpb, path, title, intro_beats=0, tens
 def synth(role, pitch, dur, vel, sr):
     a = vel / 127
     f = 440 * 2 ** ((pitch - 69) / 12)
+    if role == "drums":                       # preview only: a short noise burst
+        L = int(0.12 * sr)
+        return a * 0.3 * np.random.default_rng(pitch).standard_normal(L) * np.exp(-np.arange(L) / sr * 40)
     if role == "markers":
         L = int(0.8 * sr); t = np.arange(L) / sr
         f = 2600 if pitch == MARKER_HOT else 700
@@ -927,13 +930,14 @@ def _align_by_date(full: dict):
 
 
 def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None, loop=False,
-            mapping="hybrid", key="C", scale=None, harmony="auto", chord_bars=2, bpm=76.0,
+            mapping="hybrid", key="C", scale=None, harmony="auto", chord_bars=2, bpm=None,
             beats_per_bar=4, frames_per_bar=None, add_ending=True, palette="orchestra",
             only=None, exclude=None, seed=7, out_dir=None, name=None,
             preview=False, render=False, reverb=0.28, audio_format="wav", verbose=False,
             intro=True, tension=True, climax=True, humanize=0.5,
             style="data", quantize="scale", markers=True, marker_threshold=1.5, audio_engine="auto",
-            cells=None, cells_grid=None, duration_s=None, pitch_range="window"):
+            cells=None, cells_grid=None, duration_s=None, pitch_range="window", eras=False, genre="orchestra",
+            tempo_from_temperature=True, temperature_sound="heartbeat"):
     """Data maps -> score. Writes MIDI (+ stems, JSON, optional PNG/audio) to out_dir and returns
     a dict with the score document, file paths and stats.
 
@@ -951,7 +955,23 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
 
     duration_s: play this many seconds of data starting at `start` (instead of giving `end`).
     As many bars as fit at about `bpm` are taken, then the tempo is nudged so that they last
-    exactly duration_s. Near the end of the dataset, where fewer frames are left, the piece is shorter."""
+    exactly duration_s. Near the end of the dataset, where fewer frames are left, the piece is shorter.
+
+    eras (fun mode, data style only): the date of each bar picks the music of its time, from a Romantic
+    orchestra before 1910 to modern pop / trap after 2010 (see eras.py). Pitch and loudness stay the data's;
+    instruments, comping rhythm, swing and a drum kit change with the era. No anomaly markers in this mode.
+
+    genre: the musical style of the whole piece (data style only): "orchestra" (default), "ragtime", "swing",
+    "rocknroll", "funk", "synthpop", "house", "trap" (eras.py: one instrument set and groove from the first bar to
+    the last), or "realistic": every variable is heard as the sound of what it is (rain, fire, thunder, a heartbeat
+    ...; soundscape.py). bpm None = the genre's usual tempo (76 for the orchestra and the realistic mode).
+
+    tempo_from_temperature (data style, default on): each bar's tempo follows the temperature of that bar, scaled on
+    the whole series of the area (5th..95th percentile; the same temperature = the same tempo in every piece):
+    bpm x 0.75 (cold) to x 1.25 (hot); in the realistic mode a heartbeat from 60 to 130 bpm. With duration_s, the number of bars is
+    chosen with these tempos so that the piece still lasts duration_s (a hot chunk covers more months).
+
+    temperature_sound (realistic mode): "heartbeat" (default) or "clock" (a ticking clock, tick-tock on each beat)."""
     log = print if verbose else (lambda *a, **k: None)
     if style not in ("data", "musical"):
         raise ComposeError("style must be 'data' or 'musical'")
@@ -960,9 +980,23 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
     if pitch_range not in ("window", "series"):
         raise ComposeError("pitch_range must be 'window' or 'series'")
     musical = style == "musical"
+    import eras as era_mod
+    gkey = "realistic" if str(genre or "").strip().lower() in ("realistic", "realiste", "réaliste", "nature") \
+        else era_mod.genre_key(genre)
+    if gkey is None:
+        raise ComposeError(f"unknown genre '{genre}'; available: {', '.join(list(era_mod.GENRES) + ['realistic'])}")
+    if (eras or gkey != "orchestra") and musical:
+        raise ComposeError("eras and genres work with style 'data' (the default)")
+    if eras and gkey != "orchestra":
+        raise ComposeError("choose either eras (the style follows the date) or a genre (one style), not both")
+    if bpm is None:
+        bpm = float(era_mod.GENRES[gkey]["bpm"]) if gkey in era_mod.GENRES else 76.0
+    if eras or gkey != "orchestra":
+        markers = False          # a drum kit takes the percussion channel; the realistic mode is sounds only
     if not musical:      # data-faithful: nothing that isn't in the data
         intro, climax, humanize, add_ending = False, False, None, False
     bars_wanted = None
+    base_bpm = bpm
     if duration_s is not None:
         if not duration_s > 0:
             raise ComposeError("duration_s must be a positive number of seconds")
@@ -1025,6 +1059,33 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
         ok = np.isfinite(d["mean"])
         d["span"] = (float(d["mean"][ok].min()), float(d["mean"][ok].max())) if ok.any() else (np.nan, np.nan)
     hint = _align_by_date(full)            # maps from different datasets -> one time axis (no-op for one dataset)
+
+    # ---- the temperature sets the tempo: the hotter the bar, the faster (data style)
+    temp_tempo = None
+    if tempo_from_temperature and not musical and LEAD_VAR in full and np.isfinite(full[LEAD_VAR]["span"][0]):
+        dT = full[LEAD_VAR]
+        # robust scale: the 5th..95th percentile of the whole series of the area (a few extreme months would
+        # otherwise squeeze every ordinary month into the middle tempos)
+        lo_, hi_ = (float(q) for q in np.nanpercentile(dT["mean"], [5, 95]))
+
+        def bar_bpm(seg, lo_=lo_, hi_=hi_):
+            ok = seg[np.isfinite(seg)] if len(seg) else seg
+            x = float(np.clip((ok.mean() - lo_) / ((hi_ - lo_) or 1), 0, 1)) if len(ok) else 0.5
+            return 60.0 + 70.0 * x if gkey == "realistic" else base_bpm * (0.75 + 0.5 * x)
+        fpb_t = float(frames_per_bar or hint or dT["meta"].get("frames_per_bar", 1.0))
+        temp_tempo = dict(bar_bpm=bar_bpm, scale=1.0)
+        if bars_wanted is not None:        # as many bars as fit in duration_s at THEIR tempo
+            win0 = _time_window(dT["times"], start, end, None)
+            i0, i1 = (0, len(dT["mean"])) if win0 is None else (win0.start, win0.stop)
+            total, n = 0.0, 0
+            while i0 + n * fpb_t < i1 - 1e-9:
+                a, b = int(round(i0 + n * fpb_t)), int(round(i0 + (n + 1) * fpb_t))
+                d_ = int(beats_per_bar) * 60.0 / bar_bpm(dT["mean"][a:max(b, a + 1)])
+                if n > 0 and total + d_ / 2 > duration_s:
+                    break
+                total, n = total + d_, n + 1
+            bars_wanted = n
+            temp_tempo["scale"] = total / duration_s if total < duration_s * 2 else 1.0
     for var, d in full.items():
         m, zsc, meta, times = d["mean"], d["z"], d["meta"], d["times"]
         max_frames = None
@@ -1048,6 +1109,13 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
     n_beats = n_bars * bpb
     sl = scale_notes(key_pc, scale)
     rng = np.random.default_rng(seed)
+    bar_tempi = None
+    if temp_tempo is not None and LEAD_VAR in series:   # one tempo per bar, from the temperature of the bar
+        mT = series[LEAD_VAR]["mean"]
+        bar_tempi = [round(temp_tempo["bar_bpm"](mT[int(round(b * fpb)):max(int(round((b + 1) * fpb)),
+                                                                          int(round(b * fpb)) + 1)])
+                           * temp_tempo["scale"], 3) for b in range(n_bars)]
+        bpm = round(base_bpm * temp_tempo["scale"], 3) if gkey != "realistic" else round(float(np.median(bar_tempi)), 3)
 
     for var, d in series.items():
         cfg = orch[var]
@@ -1122,6 +1190,38 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
         parts.append(dict(var="anomaly_markers", cfg=dict(MARKER_CFG), notes=mnotes, ccs=[],
                           pres=np.clip(np.abs(zbeat) / 3, 0, 1)))
 
+    # ---- music through the ages: each bar played in the style of its date
+    era_segments, bar_eras = None, None
+    if eras or gkey not in ("orchestra", "realistic"):
+        if eras:
+            times_ = series[ref_var]["times"]
+            if times_ is None:
+                raise ComposeError("eras needs dated data (the maps have no time axis)")
+            keys = [era_mod.era_of_year(int(str(times_[min(int(b * fpb), len(times_) - 1)])[:4]))["key"]
+                    for b in range(n_bars)]
+        else:                    # one genre for the whole piece: the names say which instrument plays what
+            keys = [gkey] * n_bars
+            for p in parts:
+                label = p["cfg"]["name"].split(" - ")[0]
+                p["cfg"] = dict(p["cfg"], name=f"{label} - " + era_mod.instrument_name(
+                    gkey, p["var"], p["cfg"]["role"], p["cfg"]["name"].partition(" - ")[2], p["cfg"]["program"]))
+        era_segments, bar_eras = era_mod.apply(parts, keys, bpb, sl, n_bars, {p["cfg"]["channel"] for p in parts},
+                                               era_names=eras)
+        if not eras:
+            bar_eras = None
+        if any(p["var"] == "era_drums" for p in parts):
+            series["era_drums"] = dict(values=np.full(n_bars * bpb, np.nan), bar_z=np.full(n_bars, np.nan),
+                                       levels=[1] * n_bars, meta={"units": None, "source": "the drum kit of the style"})
+    if temperature_sound not in ("heartbeat", "clock"):
+        raise ComposeError("temperature_sound must be 'heartbeat' or 'clock'")
+    if gkey == "realistic":
+        import soundscape
+        for p in parts:
+            label = p["cfg"]["name"].split(" - ")[0]
+            sound = "Ticking clock (faster when warmer)" if (p["var"] == LEAD_VAR and temperature_sound == "clock") \
+                else soundscape.SOUND_NAMES.get(p["var"], "(silent)")
+            p["cfg"] = dict(p["cfg"], name=f"{label} - {sound}")
+
     # ---- climax: the most anomalous bar
     tz = np.nan_to_num(np.abs(series[LEAD_VAR]["bar_z"])) if LEAD_VAR in series else np.zeros(n_bars)
     climax_bar = int(np.argmax(tens + 0.01 * tz)) if (climax and use_tension and tens.max() >= 0.4) else None
@@ -1184,7 +1284,11 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
     for p in parts:
         p["notes"] = sorted((int(pt), float(st), float(du), int(np.clip(v, 1, 127))) for pt, st, du, v in p["notes"])
         p["ccs"] = sorted(p["ccs"], key=lambda c_: c_[2])
-    tmap = comp.tempo_map(bpm, total_beats, outro_start)
+    if bar_tempi is not None:
+        tmap = [(float(intro_beats + b * bpb), t) for b, t in enumerate(bar_tempi)
+                if b == 0 or t != bar_tempi[b - 1]]
+    else:
+        tmap = comp.tempo_map(bpm, total_beats, outro_start)
     b2s = lambda b: comp.beat_to_sec(b, tmap)  # noqa: E731
 
     # ---- files
@@ -1194,19 +1298,23 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
     stems_dir = out / f"{name}_stems"
     stems_dir.mkdir(exist_ok=True)
     paths = {"midi": out / f"{name}.mid", "json": out / f"{name}.json", "stems": {}}
-    score = MidiFile(bpm=bpm, time_sig=(bpb, 4))
+    score = MidiFile(bpm=tmap[0][1], time_sig=(bpb, 4))
     for p in parts:
         cfg = p["cfg"]
-        stem = MidiFile(bpm=bpm, time_sig=(bpb, 4))
+        stem = MidiFile(bpm=tmap[0][1], time_sig=(bpb, 4))
         for mf in (score, stem):
             for tb, tbpm in tmap[1:]:
                 mf.tempo(tb, tbpm)
-            t = mf.add_track(cfg["name"], cfg["program"], cfg["channel"])
-            t.cc(7, 100); t.cc(10, cfg["pan"]); t.cc(11, 127 if not p["ccs"] else 0)
-            for cnum, v, b in p["ccs"]:
-                t.cc(cnum, v, b)
-            for pitch, st, du, vel in p["notes"]:
-                t.note(pitch, st, du, vel)
+            for tr in p.get("era_tracks") or [dict(name=cfg["name"], channel=cfg["channel"],
+                                                       programs=[(0, cfg["program"])], notes=p["notes"])]:
+                t = mf.add_track(tr["name"], tr["programs"][0][1], tr["channel"])
+                t.cc(7, 100); t.cc(10, cfg["pan"]); t.cc(11, 127 if not p["ccs"] else 0)
+                for b, prog in tr["programs"][1:]:
+                    t.program_change(prog, b)
+                for cnum, v, b in p["ccs"]:
+                    t.cc(cnum, v, b)
+                for pitch, st, du, vel in tr["notes"]:
+                    t.note(int(pitch), float(st), float(du), int(np.clip(vel, 1, 127)))
         stem.save(stems_dir / f"{p['var']}.mid")
         paths["stems"][p["var"]] = stems_dir / f"{p['var']}.mid"
     marker_track = score.add_track("Sections & chords (markers)", 0, 15)
@@ -1250,8 +1358,16 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
         "sections": sections,
         "bars": [{"index": b, "start_beat": intro_beats + b * bpb, "start_s": round(b2s(intro_beats + b * bpb), 3),
                   "time": bar_time(b), "chord": None if h is None else h["name"],
-                  "tension": round(float(tens_info[b]), 3), "mode": modes[b], "climax": b == climax_bar}
+                  "tension": round(float(tens_info[b]), 3), "mode": modes[b], "climax": b == climax_bar,
+                  **({"era": bar_eras[b]} if bar_eras else {})}
                  for b, h in enumerate(chords)],
+        # eras mode: [{key, name, start_bar, bars, start_s, time}], the musical era of each stretch of the piece
+        "genre": gkey,
+        "tempo_from_temperature": bar_tempi is not None,
+        "tempo_range": [min(t for _, t in tmap), max(t for _, t in tmap)],
+        "eras": None if not (eras and era_segments) else [
+            {**sg, "start_s": round(b2s(intro_beats + sg["start_bar"] * bpb), 3), "time": bar_time(sg["start_bar"])}
+            for sg in era_segments],
         "instruments": {p["var"]: {
             "name": p["cfg"]["name"], "role": p["cfg"]["role"], "program": p["cfg"]["program"],
             "channel": p["cfg"]["channel"], "pan": p["cfg"]["pan"], "register": [p["cfg"]["low"], p["cfg"]["high"]],
@@ -1299,8 +1415,17 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
         log(f"wrote {name}_score.png and {name}_preview.wav")
     if render:
         import render_audio
-        sf2 = render_audio.ensure_soundfont(render_audio.DEFAULT_SF2)
-        x, sr = render_audio.render(paths["midi"], sf2, reverb=reverb, engine=audio_engine)
+        if gkey == "realistic":           # recordings of rain, fire, thunder ... instead of instruments
+            import soundscape
+            if not soundscape.ensure_ambience(verbose=verbose):
+                raise ComposeError("the realistic sounds could not be downloaded (python music/soundscape.py --download)")
+            layers = [dict(var=p["var"], role=p["cfg"]["role"], norm=series[p["var"]]["norm"],
+                           pres=series[p["var"]]["pres"], gate=p["cfg"]["gate"]) for p in parts]
+            x, sr = soundscape.render(layers, [b2s(b) for b in range(total_beats + 1)], b2s(total_beats),
+                                      temperature_sound=temperature_sound)
+        else:
+            sf2 = render_audio.ensure_soundfont(render_audio.DEFAULT_SF2)
+            x, sr = render_audio.render(paths["midi"], sf2, reverb=reverb, engine=audio_engine)
         wav = out / f"{name}.wav"
         render_audio.save_wav(x, sr, wav)
         paths["audio"] = wav
@@ -1311,6 +1436,7 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
                 paths["audio"] = mp3
         import sampler
         eng = "VSCO 2 CE orchestral samples + GeneralUser GS" if (audio_engine != "sf2" and sampler.vsco_available()) else "GeneralUser GS"
+        eng = "realistic recordings" if gkey == "realistic" else eng
         log(f"wrote {paths['audio'].name}  ({eng}, {len(x) / sr:.0f} s)")
     return {"name": name, "doc": doc, "paths": paths}
 
@@ -1337,7 +1463,7 @@ def main():
     ap.add_argument("--harmony", choices=["auto", "co2", "surface_temperature", "progression"], default="auto",
                     help="which variable picks the chord of each bar (auto: CO2, else temperature)")
     ap.add_argument("--chord-bars", type=int, default=2, help="harmonic rhythm: bars per chord")
-    ap.add_argument("--bpm", type=float, default=76)
+    ap.add_argument("--bpm", type=float, default=None, help="tempo (default: 76, or the usual tempo of --genre)")
     ap.add_argument("--beats-per-bar", type=int, default=4)
     ap.add_argument("--frames-per-bar", type=float, default=None,
                     help="data frames per bar (default: dataset hint, e.g. 7 for daily data = one bar per week; else 1)")
@@ -1359,6 +1485,13 @@ def main():
     ap.add_argument("--quantize", choices=["scale", "pentatonic", "chromatic"], default="scale",
                     help="pitch grid in data style (chromatic = finest resolution)")
     ap.add_argument("--no-markers", action="store_true", help="data style: no anomaly triangle/woodblock")
+    ap.add_argument("--genre", default="orchestra", help="orchestra (default), ragtime, swing, rocknroll, funk, synthpop, "
+                                                          "house, trap, or realistic (recordings of rain, fire, thunder ...)")
+    ap.add_argument("--fixed-tempo", action="store_true", help="the temperature does not change the tempo")
+    ap.add_argument("--temperature-sound", default="heartbeat", choices=["heartbeat", "clock"],
+                    help="realistic mode: the temperature as a heartbeat (default) or a ticking clock")
+    ap.add_argument("--eras", action="store_true", help="fun: music through the ages, each bar in the style of its date "
+                                                        "(Romantic orchestra < 1910 ... modern pop / trap >= 2010)")
     ap.add_argument("--engine", choices=["auto", "vsco", "sf2"], default="auto",
                     help="audio: auto = VSCO 2 CE samples if downloaded (python music/sampler.py --download), else SoundFont")
     a = ap.parse_args()
@@ -1386,7 +1519,8 @@ def main():
                 only=a.only.split(",") if a.only else None, exclude=a.exclude.split(",") if a.exclude else None,
                 seed=a.seed, out_dir=a.out, name=a.name, preview=a.preview, render=a.render,
                 reverb=a.reverb, audio_format="mp3" if a.mp3 else "wav", verbose=True,
-                style=a.style, quantize=a.quantize, markers=not a.no_markers, audio_engine=a.engine)
+                style=a.style, quantize=a.quantize, markers=not a.no_markers, audio_engine=a.engine, eras=a.eras,
+                genre=a.genre, tempo_from_temperature=not a.fixed_tempo, temperature_sound=a.temperature_sound)
     except ComposeError as e:
         sys.exit(f"error: {e}")
 

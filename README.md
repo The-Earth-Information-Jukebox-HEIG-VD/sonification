@@ -18,11 +18,12 @@ pip install -r requirements.txt
 python simulation/build_daily_dataset.py --precip precipitation_pixels_2024-01-01_2024-12-31.npz   # REAL daily 2024 (default)
 python simulation/build_realistic_dataset.py   # REAL monthly NASA GISTEMP + NOAA CO2 (2015 -> today)
 python simulation/build_monthly_dataset.py --precip ../data_processing/precipitation/monthly_2000_2026   # the team's REAL monthly precipitation, 2000 -> 2026
-python simulation/build_monthly_dataset.py --temperature temperature_anomaly_common_grid_npy --res 2 --frames-per-bar 12   # REAL temperature anomaly 1880 -> 2025
+python simulation/build_monthly_dataset.py --temperature datasets/data/temperature_anomaly_1880_2025 --res 2 --prefix real_temperature_1880_2025   # REAL temperature anomaly 1880 -> 2025
 # the team's datasets repo (datasets/data): precipitation + temperature anomaly + CO2, see simulation/README.md
 pip install --no-deps tinysoundfont          # audio rendering
 python music/render_audio.py --download      # fetch the SoundFont once (~32 MB), so the first audio request does not wait
 python music/sampler.py --download           # real orchestral samples (VSCO 2 CE, CC0, ~440 MB, once)
+python music/soundscape.py --download        # recordings for genre "realistic" (rain, fire, thunder ...; ~30 MB, once)
 python music/orchestra.py simulation/output/real_daily_2024_ --zone switzerland --render --mp3
 ```
 Listen to `music/output/orchestra_switzerland_all.mp3`, or open the `.mid` in any DAW (GarageBand, Ableton, Logic, MuseScore…). Every instrument has its own track. Examples are in `music/examples/`.
