@@ -19,7 +19,7 @@ python simulation/build_daily_dataset.py --precip ../data_processing/precipitati
 python simulation/build_realistic_dataset.py   # REAL monthly NASA GISTEMP + NOAA CO2 (2015 -> today)
 python simulation/build_monthly_dataset.py --precip ../data_processing/precipitation/monthly_2000_2026   # the team's REAL monthly precipitation, 2000 -> 2026
 python simulation/build_monthly_dataset.py --temperature ../datasets/data/temperature_anomaly_1880_2025 --res 2 --prefix real_temperature_1880_2025   # REAL temperature anomaly 1880 -> 2025
-# the team's datasets repo (datasets/data) has these folders: co2_2002_2022, fires_2002_2026, lightning_2017_2023, nightlights_2012_2023, precipitation_rain_2000_2026, precipitation_snow_2000_2026, sea_ice_1979_2026, temperature_anomaly_1880_2025 (and rain_belt_2000_2026, not played); see simulation/README.md
+# the team's datasets repo (datasets/data) has these folders: co2_2002_2022, fires_2002_2026, lightning_2017_2023, nightlights_2012_2023, precipitation_rain_2000_2026, precipitation_snow_2000_2026, sea_ice_1979_2026, temperature_anomaly_1880_2025, vegetation_ndvi_2000_2026, carbon_monoxide_2000_2024, chlorophyll_2002_2026 (and rain_belt_2000_2026, one value per latitude, not played); see simulation/README.md
 pip install --no-deps tinysoundfont          # audio rendering
 python music/render_audio.py --download      # fetch the SoundFont once (~32 MB), so the first audio request does not wait
 python music/sampler.py --download           # real orchestral samples (VSCO 2 CE, CC0, ~440 MB, once)
@@ -52,6 +52,9 @@ The image is self-contained for audio: `tinysoundfont`, `ffmpeg` and the General
 /app/data/lightning_2017_2023/lightning_<YYYY>_<MM>.npy                  (share of each pixel with lightning, 0-1)
 /app/data/co2_2002_2022/co2_<YYYY>_<MM>.npy                              (ppm)
 /app/data/sea_ice_1979_2026/sea_ice_<YYYY>_<MM>.npy                      (% of each cell covered by sea ice, NaN on land)
+/app/data/vegetation_ndvi_2000_2026/ndvi_<YYYY>_<MM>.npy                 (vegetation index NDVI, NaN over the sea)
+/app/data/carbon_monoxide_2000_2024/co_<YYYY>_<MM>.npy                   (total column, 10^18 molecules/cm2, 20 months missing)
+/app/data/chlorophyll_2002_2026/chlorophyll_<YYYY>_<MM>.npy              (ocean chlorophyll-a, mg/m3, NaN on land and under clouds)
 ```
 At start-up `backend/serve.py` runs `backend/prepare_data.py` in the background. It converts those folders with `simulation/build_monthly_dataset.py` into `/app/cache/_datasets`, which the API also scans:
 
@@ -64,6 +67,9 @@ At start-up `backend/serve.py` runs `backend/prepare_data.py` in the background.
 | `real_nightlights_2012_2023` | night lights, 2012 → 2023, 1°; one map per year, repeated for its 12 months |
 | `real_lightning_2017_2023` | lightning activity, March 2017 → July 2023, 1°, 55°S–55°N |
 | `real_sea_ice_1979_2026` | sea ice, January 1979 → October 2026, 1°: % of the sea covered by ice; December 1987 and January 1988 are missing in the source and stay empty |
+| `real_vegetation_2000_2026` | vegetation index (NDVI), March 2000 → October 2026, 1°, land only |
+| `real_carbon_monoxide_2000_2024` | carbon monoxide (MOPITT), April 2000 → October 2024, 1°; the 20 months missing at NASA stay empty |
+| `real_chlorophyll_2002_2026` | ocean chlorophyll-a, July 2002 → October 2026, 1°, sea only; played on a log scale |
 | `real_co2_2002_2022` | CO₂, September 2002 → March 2022, 1°, outline pixels removed (see below) |
 
 One dataset per variable, one bar per month in all of them. **A request can mix them freely** (`JUKEBOX_MERGE_DATASETS=1`, set in the image): each variable is read from its own dataset and the composer lines them up by date, so a piece can start in 1950 with the piano alone, or in 1999 with the violins joining in June 2000. An instrument is silent for the months its data does not cover. The frontend decides what it asks for: the start date, the length (`duration_s`), and a faster time scale if it wants one (`"frames_per_bar": 12` in the request makes one bar a year).

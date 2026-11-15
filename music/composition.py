@@ -14,6 +14,9 @@ import numpy as np
 #   "neg": only below normal is tense (sea ice: less ice than the season's normal)
 TENSION_WEIGHTS = {
     "sea_ice": (0.5, "neg"),
+    "vegetation": (0.4, "neg"),       # browner than the season's normal (drought)
+    "carbon_monoxide": (0.5, "pos"),
+    "chlorophyll": (0.3, "abs"),
     "surface_temperature": (1.0, "abs"),
     "precipitation": (0.5, "abs"),
     "snowfall": (0.4, "pos"),
@@ -38,7 +41,7 @@ def frames_per_year(times, default=12.0) -> float:
         return default
 
 
-SKEWED = {"precipitation", "snowfall", "lightning", "aerosol_smoke", "aerosol_dust", "fires"}   # analysed in log space
+SKEWED = {"precipitation", "snowfall", "lightning", "aerosol_smoke", "aerosol_dust", "fires", "chlorophyll"}   # analysed in log space
 
 
 def seasonal_anomaly(series: np.ndarray, times=None, reference_years: float = 3.0, log: bool = False,

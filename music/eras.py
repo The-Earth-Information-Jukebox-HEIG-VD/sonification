@@ -64,6 +64,8 @@ ERAS = [
          vars={"snowfall": 10, "aerosol_dust": 75, "aerosol_smoke": 63}),
 ]
 KEEP_VARS = {"nightlights", "sea_ice"}   # already synthetic pads (lamps, bowed glass): the same sound in every era
+# vegetation, carbon monoxide and chlorophyll follow the genre: its melody instrument (vegetation, chlorophyll) or
+# its swell instrument (carbon monoxide), as rain and fires do
 ERA_BY_KEY = {e["key"]: e for e in ERAS}
 GENRES = ERA_BY_KEY                # genre id -> style; "orchestra" = the normal orchestra (no change)
 GENRE_ALIASES = {"classical": "orchestra", "classic": "orchestra", "jazz": "swing", "bigband": "swing",

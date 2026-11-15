@@ -271,6 +271,13 @@ All fields are optional. The smallest request is `{}` (global zone, default data
 
 ```
 
+### New in v2.14 (vegetation, carbon monoxide, ocean plankton)
+- three new variables from the team's data, monthly, on the 1° grid:
+  - **vegetation** (`vegetation`, clarinet; also `ndvi`): NASA MODIS Terra vegetation index (NDVI), 2000-03 → 2026-10, land only. Silent over deserts (NDVI under about 0.12).
+  - **carbon monoxide** (`carbon_monoxide`, bassoon, held swells; also `co`): MOPITT on NASA Terra (an instrument of the Canadian Space Agency), total column, 2000-04 → 2024-10. The scale starts at the clean background (1.4 × 10^18 molecules/cm²), so only the pollution above it plays. The 20 months missing at NASA (inside its date range) have no value (the bassoon rests).
+  - **ocean plankton** (`chlorophyll`, vibraphone, strokes per beat = amount; also `plankton`): NASA MODIS Aqua chlorophyll-a, 2002-07 → 2026-10, sea only. On a **log scale** (`log_scale` in the dataset's metadata): it spans 0.03 to 10+ mg/m³, and each tenfold step is the same pitch step.
+- realistic mode: crickets and cicadas, idling engines and machines, bubbles rising in the sea (all synthesised). In the genres they take the genre's melody instrument (vegetation, plankton) or its swell instrument (carbon monoxide), as rain and fires do.
+
 ### New in v2.13 (the CO2 sets the tempo)
 - by default the tempo of each bar now follows the **global CO2** of its dates instead of the temperature, in every genre: the genre's bpm x (0.8 + 0.45 u), u = (ppm - 290) / (430 - 290), so x0.8 in 1880 and about x1.23 today; the music speeds up with the years and never slows down, as CO2 almost never goes down. Record: Law Dome ice cores to 1958, Mauna Loa (NOAA / Scripps) 1959-2024, 2025-2026 estimated from the measured May-to-May rises (`music/urgency.py`). The same curve for every area (CO2 mixes evenly).
 - `realistic`: the heartbeat plays at the CO2's tempo whatever the datasets (60 bpm in 1880 to about 132 today), and turns irregular above 400 ppm (skipped and premature beats); the temperature becomes a low heat drone that trembles faster and clashes with a semitone when warmer; the whole soundscape gets louder with the CO2.

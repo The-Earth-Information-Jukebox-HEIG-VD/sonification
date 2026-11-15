@@ -33,8 +33,11 @@ One entry per dataset the server has data for:
 | `lightning` | Timpani | share of the area with lightning (0–1) | 2017-03 → 2023-07 |
 | `night_lights` | Synth pad | brightness (0–1) | 2012-01 → 2023-12, one value per year |
 | `sea_ice` | Bowed glass (melody) | % of the sea covered by ice | 1979-01 → 2026-10, no value in 1987-12 and 1988-01 |
+| `vegetation` | Clarinet (melody) | vegetation index (NDVI) | 2000-03 → 2026-10, land only |
+| `carbon_monoxide` | Bassoon | 10^18 molecules/cm² | 2000-04 → 2024-10, 20 months without value |
+| `chlorophyll` | Vibraphone | mg/m³ (played on a log scale) | 2002-07 → 2026-10, sea only |
 
-`dataset_id` is what you send below, and it is the file prefix of the dataset's folder in the data volume (`fires`, `co2`, `lightning`) wherever the two can match. Also accepted: `co2_atmosphere` for `co2`, `wildfires` for `fires`, `rain` for `precipitation`, `snowfall` for `snow`, `nightlights` for `night_lights`, `ice` and `seaice` for `sea_ice`.
+`dataset_id` is what you send below, and it is the file prefix of the dataset's folder in the data volume (`fires`, `co2`, `lightning`) wherever the two can match. Also accepted: `co2_atmosphere` for `co2`, `wildfires` for `fires`, `rain` for `precipitation`, `snowfall` for `snow`, `nightlights` for `night_lights`, `ice` and `seaice` for `sea_ice`, `ndvi` for `vegetation`, `co` for `carbon_monoxide`, `plankton` for `chlorophyll`.
 
 `sea_ice` has no value on land: over an area it is the share of the sea that is frozen. Over land only (a country without coast) it is `null` or 0 and the bowed glass stays silent; it enters above about 5 % of ice.
 
@@ -128,6 +131,9 @@ gets `"genre": "rocknroll"`.
 | co2 | city traffic | loudness = CO₂ level |
 | night_lights | the 50 Hz hum of street lamps | loudness = brightness |
 | sea_ice | "singing" ice: falling pings of cracks and low creaks of floes (synthesised) | how often = how much ice |
+| vegetation | crickets and a cicada (synthesised) | loudness = how green |
+| carbon_monoxide | idling engines and machines (synthesised) | loudness = pollution above the background |
+| chlorophyll | bubbles rising in the sea (synthesised) | how often = how much plankton |
 
 ### Optional: music through the ages (`"eras": true`)
 A fun mode, off by default. Add `"eras": true` to either call and the music takes the style of its date:

@@ -13,6 +13,9 @@ In the deployment the `datasets` image fills a read-only volume with the extract
     <raw>/lightning_2017_2023/lightning_<YYYY>_<MM>.npy
     <raw>/co2_2002_2022/co2_<YYYY>_<MM>.npy
     <raw>/sea_ice_1979_2026/sea_ice_<YYYY>_<MM>.npy
+    <raw>/vegetation_ndvi_2000_2026/ndvi_<YYYY>_<MM>.npy
+    <raw>/carbon_monoxide_2000_2024/co_<YYYY>_<MM>.npy
+    <raw>/chlorophyll_2002_2026/chlorophyll_<YYYY>_<MM>.npy
 
 The API reads `<prefix>_<variable>.npz + .json` (simulation/INTENSITY_MAP_SPEC.md), so this script runs
 simulation/build_monthly_dataset.py on the folders it finds and writes the result to a folder the API
@@ -56,6 +59,9 @@ INPUTS = {
     "lightning": [f"lightning_{MONTH}.npy"],
     "co2": [f"co2_{MONTH}.npy"],
     "sea_ice": [f"sea_ice_{MONTH}.npy"],
+    "ndvi": [f"ndvi_{MONTH}.npy"],
+    "co": [f"co_{MONTH}.npy"],                      # not co2_...: the "_" right after "co" tells them apart
+    "chlorophyll": [f"chlorophyll_{MONTH}.npy"],
 }
 
 
@@ -81,6 +87,10 @@ RECIPES = [
     dict(name="fires", prefix="real_fires", needs=["fires"], args=["--res", "1"]),
     # % of the sea covered by ice, NaN on land; the two months the source misses (1987-12, 1988-01) stay empty
     dict(name="sea ice", prefix="real_sea_ice", needs=["sea_ice"], args=["--res", "1"]),
+    dict(name="vegetation", prefix="real_vegetation", needs=["ndvi"], args=["--res", "1"]),
+    # 20 months missing at NASA: kept as empty months
+    dict(name="carbon monoxide", prefix="real_carbon_monoxide", needs=["co"], args=["--res", "1"]),
+    dict(name="chlorophyll", prefix="real_chlorophyll", needs=["chlorophyll"], args=["--res", "1"]),
     # yearly maps: the converter repeats each one for the 12 months of its year
     dict(name="night lights", prefix="real_nightlights", needs=["nightlights"], args=["--res", "1"]),
 ]

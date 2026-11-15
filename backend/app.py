@@ -53,7 +53,7 @@ CACHE_DIR = Path(os.environ.get("JUKEBOX_CACHE_DIR", ROOT / "backend" / "cache")
 # datasets converted from the team's raw folders by backend/prepare_data.py (the data folder can be read-only)
 BUILT_DIR = Path(os.environ.get("JUKEBOX_BUILT_DIR") or CACHE_DIR / "_datasets")
 CORS = [o.strip() for o in os.environ.get("JUKEBOX_CORS", "*").split(",")]
-API_VERSION = "2.13"
+API_VERSION = "2.14"
 COMPOSITION_ID = re.compile(r"[0-9a-f]{16}")         # what cache_key() produces
 # 1 = a request that names no dataset takes EACH variable from its own best dataset and the composer lines
 # them up by date (temperature since 1880 with precipitation joining in 2000 ...). The Docker image sets it:
@@ -461,6 +461,8 @@ VARIABLE_ALIASES = {"temperature": "surface_temperature", "temp": "surface_tempe
                     "rain": "precipitation", "precip": "precipitation", "dust": "aerosol_dust",
                     "smoke": "aerosol_smoke", "fire": "fires", "wildfires": "fires", "carbon_dioxide": "co2", "snow": "snowfall",
                     "ice": "sea_ice", "seaice": "sea_ice", "sea_ice_concentration": "sea_ice",
+                    "ndvi": "vegetation", "vegetation_ndvi": "vegetation", "co": "carbon_monoxide",
+                    "plankton": "chlorophyll", "ocean_chlorophyll": "chlorophyll",
                     # the webapp's own ids (webapp/src/data/tracks.ts)
                     "night_lights": "nightlights", "co2_atmosphere": "co2"}
 POINT_GRID = (1800, 3600)      # lat/lng points are placed on a 0.1 degree grid, then rescaled onto each data map

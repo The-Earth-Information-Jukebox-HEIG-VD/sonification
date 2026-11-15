@@ -73,6 +73,9 @@ Variables that are **present all the time** (temperature, CO₂) form the harmon
 | **Percussion** E2–G3 | lightning (sometimes) | **Timpani** (thunder) | hits per beat = flash density, pitch = value | beat patterns, roll before the climax |
 | **Swell** E2–C4 | fires (sometimes) | **Trombones** | held, louder with more fires | held swell |
 | **Melody** D5–A6 | sea ice (polar seas) | **Bowed glass**, high and sustained | pitch = share of the sea frozen, **loudness = amount of ice**; silent where there is no sea ice | gated legato line |
+| **Melody** G3–E5 | vegetation (land) | **Clarinet** | pitch = how green (NDVI); silent over deserts | gated legato line |
+| **Swell** B♭2–F4 | carbon monoxide (sometimes) | **Bassoon** | held, louder with more pollution above the clean background | held swell |
+| **Strokes** C4–C6 | ocean chlorophyll (sea) | **Vibraphone** | strokes per beat = amount of plankton (log scale), pitch = value | pizzicato |
 | **Pad** D4–A5 | night lights (yearly) | **Synth pad**, the only electronic sound (human activity) | starts clearly when the yearly value changes, then fades slowly over the whole year | held swell |
 
 ### Planned: the dataset still missing

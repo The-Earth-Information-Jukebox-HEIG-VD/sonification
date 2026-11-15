@@ -26,6 +26,9 @@ Input  (from the data-extraction side, monthly, on the team's 0.25 deg common gr
     sea_ice_<YYYY>_<MM>.npy                     (--sea_ice DIR, one file per month, 1979-01 ->)
         [720,1440] float16, sea ice concentration in % of the cell (0-100), NaN on land. The source has no
         December 1987 and January 1988 (a satellite gap): those two months are kept as "no data"
+    ndvi_<YYYY>_<MM>.npy                        (--ndvi DIR, 2000-03 ->) vegetation index -0.2..1, ocean = NaN
+    co_<YYYY>_<MM>.npy                          (--co DIR, 2000-04 -> 2024-10) carbon monoxide, 20 months missing
+    chlorophyll_<YYYY>_<MM>.npy                 (--chlorophyll DIR, 2002-07 ->) mg/m3, land and clouds = NaN
 
 Any .npy grid that covers 360 deg of longitude in W columns is read: step = 360 / W, and the H rows are
 centred on the equator (rows missing at the poles become NaN).
@@ -39,6 +42,9 @@ Output (one monthly time axis, one frame = one bar):
       fires                 REAL  fire days per month (mean over the area), vmin/vmax 0..8
       nightlights           REAL  brightness 0-1, vmin/vmax 0..0.1, one value per year held for 12 months
       sea_ice               REAL  sea ice concentration in % (mean over the sea part of the area), vmin/vmax 0..100
+      vegetation            REAL  vegetation index NDVI of the land (ocean = NaN), vmin/vmax 0..0.9
+      carbon_monoxide       REAL  carbon monoxide, total column, 10^18 molecules/cm2, vmin/vmax 1.4..3.4 (missing months kept empty)
+      chlorophyll           REAL  ocean chlorophyll-a, mg/m3 (land = NaN), vmin/vmax 0.03..10, played on a log scale
       surface_temperature   REAL  temperature ANOMALY in degC (meta "anomaly": true), played by the piano like the
                                   temperature of the other datasets; vmin/vmax -5..+5 instead of -40..+40.
                                   The source is a 2 deg map copied onto 0.25 deg, so `--res 2` loses nothing.
@@ -136,9 +142,28 @@ SOURCES["sea_ice"] = dict(pattern="sea_ice_*_*.npy", reader="monthly_npy", facto
                           units="% of the sea covered by ice", vmin=0.0, vmax=100.0, fill_gaps=True,
                           source="NSIDC Sea Ice Index, monthly sea ice concentration (% of each 0.25 deg cell), "
                                  "1979 -> 2026, extracted by the team (REAL)")
+# vegetation index (NDVI) of the land, -0.2 .. 1 (ocean = NaN): 0.1 desert, 0.6-0.7 farmland, 0.8+ rainforest
+SOURCES["vegetation"] = dict(pattern="ndvi_*_*.npy", reader="monthly_npy", factor=1.0,
+                             units="vegetation index (NDVI)", vmin=0.0, vmax=0.9,
+                             source="NASA MODIS Terra vegetation index (NDVI), monthly, extracted by the team (REAL)")
+# carbon monoxide, total column in 10^18 molecules/cm2: about 1.4 over clean oceans, 3 and more over burning
+# savannas and industrial regions. vmin 1.4 = the clean background, so the amount above it is the pollution.
+# 20 months are missing at NASA (instrument problems): fill_gaps keeps them as empty months.
+SOURCES["carbon_monoxide"] = dict(pattern="co_*_*.npy", reader="monthly_npy", factor=1.0,
+                                  units="10^18 molecules/cm2", vmin=1.4, vmax=3.4, fill_gaps=True,
+                                  source="MOPITT on NASA Terra (instrument from the Canadian Space Agency), total "
+                                         "column carbon monoxide, monthly, extracted by the team (REAL)")
+# ocean chlorophyll-a in mg/m3 (land and clouds = NaN): 0.03 in the clear ocean gyres, 0.3-1 in upwellings,
+# 10+ on coasts. Spread over three orders of magnitude, so it is played on a LOG scale (log_scale in the
+# metadata): each tenfold step is the same pitch step.
+SOURCES["chlorophyll"] = dict(pattern="chlorophyll_*_*.npy", reader="monthly_npy", factor=1.0,
+                              units="mg/m3", vmin=0.03, vmax=10.0, log_scale=True,
+                              source="NASA MODIS Aqua ocean chlorophyll-a, monthly (geometric mean), extracted "
+                                     "by the team (REAL)")
 INPUT_ARGS = {"precipitation": "precip", "surface_temperature": "temperature", "co2": "co2",
               "lightning": "lightning", "snowfall": "snow", "nightlights": "nightlights",
-              "fires": "fires", "sea_ice": "sea_ice"}                                      # variable -> option
+              "fires": "fires", "sea_ice": "sea_ice", "vegetation": "ndvi",
+              "carbon_monoxide": "co", "chlorophyll": "chlorophyll"}                       # variable -> option
 
 
 def fill_month_gaps(months: list, data: np.ndarray, days: list):
@@ -312,6 +337,9 @@ def main():
     ap.add_argument("--fires", help="folder with fires_<YYYY>_<MM>.npy (days of the month with a fire, 0-31)")
     ap.add_argument("--sea_ice", "--sea-ice", dest="sea_ice",
                     help="folder with sea_ice_<YYYY>_<MM>.npy (sea ice concentration, %% of each cell, NaN on land)")
+    ap.add_argument("--ndvi", help="folder with ndvi_<YYYY>_<MM>.npy (vegetation index, ocean = NaN)")
+    ap.add_argument("--co", help="folder with co_<YYYY>_<MM>.npy (carbon monoxide, total column, 10^18 molecules/cm2)")
+    ap.add_argument("--chlorophyll", help="folder with chlorophyll_<YYYY>_<MM>.npy (ocean chlorophyll-a, mg/m3)")
     ap.add_argument("--nightlights", help="folder with nightlights_<YYYY>.npy, ONE MAP PER YEAR (brightness 0-1); "
                                           "each map is repeated for the 12 months of its year")
     ap.add_argument("--res", type=float, default=1.0, choices=[0.25, 0.5, 1.0, 2.0], help="output grid in degrees")
@@ -382,6 +410,8 @@ def main():
                 "partial_months": partial}        # months averaged over fewer than 25 days of data
         if spec.get("anomaly"):
             meta["anomaly"] = True                 # values are already anomalies (degC away from a normal)
+        if spec.get("log_scale"):
+            meta["log_scale"] = True               # very skewed: the composer plays it on a log scale
         if spec.get("reader") == "yearly_npy":     # one map per year, repeated for its 12 months
             meta["source_time_step"] = "1 year"
         if spec.get("drop_lines"):                 # how the outline pixels were removed, and how many

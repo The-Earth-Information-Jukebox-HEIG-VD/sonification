@@ -14,6 +14,9 @@
     CO2         -> city traffic                                                     loudness = level
     night lights-> the 50 Hz hum of street lamps (synthesised)                      loudness = brightness
     dust        -> desert wind;  smoke -> a smouldering fire
+    vegetation  -> crickets and a cicada, louder where greener (synthesised)       loudness = NDVI
+    carbon monoxide -> idling engines and machines (synthesised)                   loudness = pollution
+    chlorophyll -> bubbles rising in the sea, more of them in a bloom (synthesised) bubbles per beat = amount
     sea ice     -> "singing" ice: falling pings of cracks running through the ice, and low creaks of floes,
                    more of them with more ice (synthesised)                         pings per beat = amount
 
@@ -81,6 +84,7 @@ SOUND_NAMES = {
     "surface_temperature": "Heat drone (trembles and clashes when warmer)", "co2": "City traffic",
     "nightlights": "Street-lamp hum", "aerosol_dust": "Desert wind", "aerosol_smoke": "Smouldering fire",
     "sea_ice": "Singing, creaking ice",
+    "vegetation": "Crickets and cicadas", "carbon_monoxide": "Idling engines and smog", "chlorophyll": "Bubbling sea",
 }
 
 
@@ -354,6 +358,110 @@ def _ice_creak(rng, dur=0.6):
     return np.tanh(2 * y).astype(np.float32)
 
 
+def leaves(n, rng):
+    """Rustling leaves: bright noise (1.5-7 kHz) in short gusts, a little different on each side."""
+    x = _fft_filter(rng.standard_normal((n, 2)).astype(np.float32), lo=1500, hi=7000)
+    gust = _fft_filter(rng.standard_normal((n, 1)).astype(np.float32), hi=1.5)[:, 0]
+    gust = np.clip(0.4 + gust / (np.abs(gust).max() + 1e-9), 0.05, 1.4)
+    x *= gust[:, None]
+    return x / (np.sqrt(np.mean(x ** 2)) + 1e-9) * 10 ** (-24 / 20)
+
+
+def _chirp(rng, f0, f1, dur):
+    """One bird note: a sine sliding from f0 to f1 Hz with a little vibrato, soft attack and release."""
+    t = np.arange(int(dur * SR)) / SR
+    f = f0 + (f1 - f0) * (t / dur) + 120 * np.sin(2 * np.pi * rng.uniform(20, 35) * t)
+    y = np.sin(2 * np.pi * np.cumsum(f) / SR) * np.sin(np.pi * t / dur) ** 1.5
+    return y.astype(np.float32)
+
+
+def birds(beat_times, pres, n, rng):
+    """Vegetation: birdsong, more birds where the land is greener. Each bird sings a short phrase of 3-7 notes
+    (whistles, trills, falling calls); a few voices, each with its own range and place in the stereo field."""
+    out = np.zeros((n, 2), np.float32)
+    voices = [dict(lo=rng.uniform(2200, 3200), hi=rng.uniform(3600, 5200), pan=rng.uniform(0.15, 0.85)) for _ in range(4)]
+    for b, pr in enumerate(pres):
+        if not pr > 0 or b + 1 >= len(beat_times):
+            continue
+        for _ in range(rng.poisson(0.15 + 0.9 * pr)):          # phrases started in this beat
+            v = voices[rng.integers(len(voices))]
+            i = int((beat_times[b] + rng.uniform(0, beat_times[b + 1] - beat_times[b])) * SR)
+            kind = rng.integers(3)
+            for k in range(rng.integers(3, 8)):
+                if kind == 0:                                  # whistle: rising then falling notes
+                    f0 = rng.uniform(v["lo"], v["hi"]); g = _chirp(rng, f0, f0 * rng.uniform(0.85, 1.2), rng.uniform(0.08, 0.16))
+                elif kind == 1:                                # trill: quick repeated notes
+                    f0 = v["hi"] * rng.uniform(0.9, 1.0); g = _chirp(rng, f0, f0 * 0.9, 0.035)
+                else:                                          # call: falling notes
+                    f0 = v["hi"]; g = _chirp(rng, f0, v["lo"], rng.uniform(0.12, 0.2))
+                seg = g[: max(0, n - i)] * 0.22 * (0.5 + 0.5 * pr)
+                out[i:i + len(seg), 0] += seg * (1 - v["pan"]) * 2
+                out[i:i + len(seg), 1] += seg * v["pan"] * 2
+                i += len(g) + int(SR * (0.012 if kind == 1 else rng.uniform(0.03, 0.09)))
+                if i >= n:
+                    break
+    return out
+
+
+def insects(n, rng):
+    """Vegetation: crickets and cicadas. Crickets: 4-5 kHz chirps of 3-4 pulses, a few times a second; a cicada:
+    a buzzing band around 6 kHz that swells and fades. Several insects spread across the stereo field."""
+    t = np.arange(n) / SR
+    out = np.zeros((n, 2), np.float32)
+    for _ in range(4):                                       # crickets
+        fc, rate, pan = rng.uniform(4000, 5000), rng.uniform(2.0, 3.5), rng.uniform(0.15, 0.85)
+        gate = (np.sin(2 * np.pi * rate * t + rng.uniform(0, 6.3)) > 0.55).astype(np.float32)   # the chirps
+        pulses = 0.5 + 0.5 * np.sin(2 * np.pi * 30 * t)                                         # pulses inside a chirp
+        y = np.sin(2 * np.pi * fc * t) * gate * pulses ** 2
+        out[:, 0] += y * (1 - pan); out[:, 1] += y * pan
+    buzz = _fft_filter(rng.standard_normal((n, 1)).astype(np.float32), lo=5000, hi=7500)[:, 0]
+    swell = 0.5 + 0.5 * np.sin(2 * np.pi * 0.08 * t + rng.uniform(0, 6.3))
+    buzz *= swell * (0.6 + 0.4 * np.sin(2 * np.pi * 110 * t) ** 2)
+    out += 0.6 * np.stack([buzz, buzz * 0.8], 1) / (np.sqrt(np.mean(buzz ** 2)) + 1e-9) * np.sqrt(np.mean(out ** 2) + 1e-12)
+    return (out / (np.sqrt(np.mean(out ** 2)) + 1e-9) * 10 ** (-27 / 20)).astype(np.float32)
+
+
+VEGETATION_SOUND = "insects"      # chosen after a listening test; "leaves" (rustling) and "birds" (birdsong) also exist
+
+
+def smog(n, rng):
+    """Carbon monoxide: idling engines and machines. A few engines, each a pulse train at its firing rate (25-45 Hz)
+    whose rpm drifts, filtered to 80-1200 Hz so laptop and phone speakers play it, under a grey band of noise."""
+    t = np.arange(n) / SR
+    out = np.zeros((n, 2), np.float32)
+    for k in range(3):
+        f = rng.uniform(25, 45) * (1 + 0.06 * np.sin(2 * np.pi * rng.uniform(0.05, 0.2) * t + rng.uniform(0, 6.3)))
+        phase = np.cumsum(f) / SR
+        pulses = (np.sin(2 * np.pi * phase) > 0.85).astype(np.float32)          # one sharp burst per cycle
+        pulses *= 0.8 + 0.2 * rng.random(n).astype(np.float32)                    # uneven firing
+        pan = rng.uniform(0.25, 0.75)
+        out[:, 0] += pulses * (1 - pan)
+        out[:, 1] += pulses * pan
+    out = _fft_filter(out, lo=80, hi=1200)
+    grey = _fft_filter(rng.standard_normal((n, 2)).astype(np.float32), lo=150, hi=900)
+    out = out / (np.sqrt(np.mean(out ** 2)) + 1e-9) + 0.35 * grey / (np.sqrt(np.mean(grey ** 2)) + 1e-9)
+    return out * 10 ** (-24 / 20) / np.sqrt(1 + 0.35 ** 2)
+
+
+def bubbles(beat_times, pres, n, rng):
+    """Ocean plankton: bubbles rising in the water (short sine blips gliding up), more of them in a bloom."""
+    out = np.zeros((n, 2), np.float32)
+    for b, pr in enumerate(pres):
+        if not pr > 0 or b + 1 >= len(beat_times):
+            continue
+        for _ in range(rng.poisson(0.5 + 3.0 * pr)):
+            d = rng.uniform(0.04, 0.09)
+            t = np.arange(int(d * SR)) / SR
+            f0 = rng.uniform(300, 900)
+            y = np.sin(2 * np.pi * np.cumsum(f0 * (1 + 2.5 * t / d)) / SR) * np.sin(np.pi * t / d) ** 2
+            i = int((beat_times[b] + rng.uniform(0, beat_times[b + 1] - beat_times[b])) * SR)
+            seg = y[: max(0, n - i)].astype(np.float32) * 0.25 * (0.5 + 0.5 * pr)
+            pan = rng.uniform(0.2, 0.8)
+            out[i:i + len(seg), 0] += seg * (1 - pan) * 2
+            out[i:i + len(seg), 1] += seg * pan * 2
+    return out
+
+
 def ice(beat_times, pres, n, rng):
     """Sea ice: pings and creaks scattered over each beat, more of them with more ice (pres 0..1 per beat)."""
     out = np.zeros((n, 2), np.float32)
@@ -435,6 +543,17 @@ def render(layers, beat_times, total_s, seed=7, tail_s=1.0, temperature_sound="h
             mix += loop(clip("wind", lo=250, hi=4000), n, rng) * (p ** 0.8)[:, None] * 0.9
         elif var == "sea_ice":
             mix += ice(beat_times, pres, n, rng)
+        elif var == "vegetation":
+            if VEGETATION_SOUND == "birds":
+                mix += birds(beat_times, pres, n, rng)
+            elif VEGETATION_SOUND == "insects":
+                mix += insects(n, rng) * (p ** 0.8)[:, None] * 1.4
+            else:
+                mix += leaves(n, rng) * (p ** 0.8)[:, None] * 1.2
+        elif var == "carbon_monoxide":
+            mix += smog(n, rng) * (p ** 0.8)[:, None] * 1.4
+        elif var == "chlorophyll":
+            mix += bubbles(beat_times, pres, n, rng)
     if urgency is not None:
         u = np.asarray(urgency, dtype=float)
         mix *= (0.7 + 0.3 * envelope(u, beat_times, n))[:, None]

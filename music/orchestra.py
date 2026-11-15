@@ -16,6 +16,9 @@ Arranged "like a conductor":
     melody   C5..A6       aerosol_dust         Flute                   pitch = value while dust is present
     melody   F3..D5       aerosol_smoke        French horns            pitch = value while smoke is present
     melody   D5..A6       sea_ice              Bowed glass             pitch = share of the sea frozen, where there is ice
+    melody   G3..E5       vegetation           Clarinet                pitch = how green the land is (NDVI), not over deserts
+    swell    Bb2..F4      carbon_monoxide      Bassoon                 held, louder with more carbon monoxide above the background
+    rhythm   C4..C6       chlorophyll          Vibraphone              strokes per beat = amount of plankton (log scale), pitch = value
     timpani  E2..G3       lightning            Timpani                 hits per beat = flash density, pitch = value
     swell    E2..C4       fires                Trombones               held, louder with more fires
     pad      D4..A5       nightlights          Synth pad               a note per year, fading slowly over the year
@@ -109,6 +112,19 @@ ORCHESTRA = {
     # D5..A6, above the violins' usual range; channel 10 (0-8 are taken, 9 is the GM drum channel).
     "sea_ice":             dict(name="Sea ice - Bowed glass (melody)", role="melody", program=92, channel=10,
                                 low=74, high=93, gain=1.5, gate=0.08, levels=[0.45, 0.75], level=0.80, pan=84),
+    # vegetation (NDVI of the land): a clarinet line, pitch = how green; it rises every spring and falls every
+    # autumn. Silent over deserts (NDVI under about 0.12) and over the sea (no value). G3..E5, channel 11.
+    "vegetation":          dict(name="Vegetation - Clarinet (melody)", role="melody", program=71, channel=11,
+                                low=55, high=76, gain=1.5, gate=0.20, levels=[0.45, 0.75], level=0.80, pan=44),
+    # carbon monoxide (smoke of fires and traffic, above the clean background): a bassoon that swells and holds,
+    # louder with more pollution, below the melodies. Bb2..F4, channel 12.
+    "carbon_monoxide":     dict(name="Carbon monoxide - Bassoon", role="swell", program=70, channel=12,
+                                low=46, high=65, gain=1.5, gate=0.10, levels=[0.45, 0.75], level=0.80, pan=100),
+    # ocean chlorophyll (plankton, on a log scale): vibraphone strokes, more strokes per beat in a bloom, pitch =
+    # how green the sea is. Silent over land (no value). C4..C6, channel 13.
+    "chlorophyll":         dict(name="Ocean plankton - Vibraphone", role="rhythm", program=11, channel=13,
+                                low=60, high=84, gain=1.2, gate=0.10, levels=[0.45, 0.75], level=0.80, pan=20,
+                                max_notes=4),
 }
 # ----------------------------------------------------------------------------
 # Regional palettes (fun!): same roles and registers, local instruments.
@@ -1274,8 +1290,15 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
         smooth = cfg.get("smooth", cfg["role"] in SMOOTH_ROLES)     # an instrument can opt out (yearly steps)
         vals = sample_beats(d["mean"], n_ref, n_beats, fpb, bpb, loop, smooth)
         vmin, vmax = d["meta"].get("vmin", np.nanmin(vals)), d["meta"].get("vmax", np.nanmax(vals))
-        absn = np.clip((vals - vmin) / ((vmax - vmin) or 1), 0, 1)
-        reln = rel_norm(vals, d.get("span") if pitch_range == "series" else None)
+        span = d.get("span") if pitch_range == "series" else None
+        if d["meta"].get("log_scale"):     # very skewed (ocean chlorophyll 0.03 .. 10+): a tenfold step = one pitch step
+            floor = float(vmin) if vmin and vmin > 0 else 1e-3
+            lg = lambda x: np.log10(np.maximum(np.asarray(x, dtype=float), floor))  # noqa: E731
+            absn = np.clip((lg(vals) - lg(vmin)) / ((lg(vmax) - lg(vmin)) or 1), 0, 1)
+            reln = rel_norm(lg(vals), tuple(lg(span)) if span is not None else None)
+        else:
+            absn = np.clip((vals - vmin) / ((vmax - vmin) or 1), 0, 1)
+            reln = rel_norm(vals, span)
         d["values"] = vals
         d["norm"] = absn if mapping == "absolute" else reln
         pres = np.clip((reln if mapping == "relative" else absn) * cfg["gain"], 0, 1)
