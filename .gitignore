@@ -10,3 +10,4 @@ soundfonts/vsco/
 /*.npz
 temperature_anomaly_common_grid_npy/
 datasets/
+soundfonts/ambience/

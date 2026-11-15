@@ -250,7 +250,7 @@ def test_deployed_api_is_only_what_the_frontend_uses(tmp_path):
     raw, cache = raw_like_the_datasets_repo(tmp_path), tmp_path / "cache"
     prepare(raw, cache / "_datasets")
     res = run_api(raw, cache, JUKEBOX_MERGE_DATASETS="1", JUKEBOX_FULL_API="0")
-    assert res["paths"] == ["/api/health", "/api/instruments", "/api/sonify", "/api/zones/groove",
+    assert res["paths"] == ["/api/genres", "/api/health", "/api/instruments", "/api/sonify", "/api/zones/groove",
                             "/api/zones/series", "/api/zones/zone-data"]
     assert res["health"]["full_api"] is False
     assert res["compose_status"] == 404 and res["precip"]["status"] == 404          # no engine or debug endpoints

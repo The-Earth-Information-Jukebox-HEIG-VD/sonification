@@ -21,7 +21,7 @@ uvicorn backend.app:app --reload --port 8000
 |---|---|---|
 | `JUKEBOX_DATA_DIR` | `simulation/output` | folder with the intensity maps (`<dataset>_<variable>.npz` + `.json`, see `simulation/INTENSITY_MAP_SPEC.md`). When the real extraction is ready, point this at its output folder: nothing else changes. |
 | `JUKEBOX_CACHE_DIR` | `backend/cache` | generated compositions (safe to delete) |
-| `JUKEBOX_FULL_API` | `1` | `0`: only `/api/health`, `/api/instruments`, `/api/sonify`, `/api/zones/zone-data`, `/api/zones/series` and `/api/zones/groove` are served (set in the Docker image) |
+| `JUKEBOX_FULL_API` | `1` | `0`: only `/api/health`, `/api/instruments`, `/api/genres`, `/api/sonify`, `/api/zones/zone-data`, `/api/zones/series` and `/api/zones/groove` are served (set in the Docker image) |
 | `JUKEBOX_CHUNK_SECONDS` | `30` | length of one piece returned by `/api/sonify` |
 | `JUKEBOX_MERGE_DATASETS` | `0` | `1`: a request that names no dataset takes each variable from its own best dataset, lined up by date (set in the Docker image) |
 | `JUKEBOX_BUILT_DIR` | `<cache>/_datasets` | datasets converted from the team's raw folders by `backend/prepare_data.py`; scanned in addition to `JUKEBOX_DATA_DIR`. In the Docker image this happens by itself at start-up (see the README) |
@@ -270,6 +270,24 @@ All fields are optional. The smallest request is `{}` (global zone, default data
 }
 
 ```
+
+### New in v2.9 (the temperature sets the tempo)
+- data style, every genre, by default: each bar's tempo follows the temperature of the bar (x0.75 cold .. x1.25 hot around the genre's tempo, on the 5th..95th percentile of the area's whole series); in `realistic` the temperature is a **heartbeat** of 60 to 130 bpm (it replaces the birdsong). `"tempo_from_temperature": false` gives one fixed tempo (`POST /api/compose`).
+- `duration_s` is still exact: the number of bars is chosen with the bar tempos, so a 30 s chunk covers about 8 to 13 months (10 at an average temperature). Always use `next_time_period`.
+- `score.tempo_map` has one entry per tempo change, `score.tempo_range` the slowest and fastest, `score.tempo_from_temperature` says whether it was used. `score.bpm` is the genre's reference tempo (the heart's median rate in `realistic`).
+
+### New in v2.8 (genres and a realistic mode)
+- new `genre` in `POST /api/compose`, `POST /api/sonify` and `POST /api/zones/zone-data`: `orchestra` (default), `ragtime`, `swing`, `rocknroll`, `funk`, `synthpop`, `house`, `trap` (one instrument set and groove for the whole piece, `music/eras.py`) or `realistic` (recordings of rain, fire, thunder, a heartbeat, traffic, lamp hum; `music/soundscape.py`). Aliases: `jazz`, `rock`, `disco`, `electro`, `pop`, `classical`. Data style only; not together with `eras`.
+- `bpm` is now optional: the genre's usual tempo when not sent (76 for the orchestra and the realistic mode).
+- new `GET /api/genres` (also served by the deployed image) and `GET /api/instruments?genre=...` (the instrument of each dataset in that genre; without `?genre=` the answer is unchanged).
+- `score.genre`; instrument names follow the genre (`"Temperature - Clean electric guitar (eighth notes)"`, `"Rain - Rain sounds"`). `/api/sonify` and `/api/zones/zone-data` answer with `genre` when it was sent.
+- `GET /api/health`: `realistic_sounds` (the recordings are installed: `python music/soundscape.py --download`, done in the Docker image).
+
+### New in v2.7 (music through the ages)
+- new boolean `eras` (default `false`) in `POST /api/compose`, `POST /api/sonify` and `POST /api/zones/zone-data`: each bar is played in the musical style of its date, from a Romantic orchestra before 1910 to modern pop / trap from 2010 (8 eras, see `music/eras.py` and `FRONTEND_API.md`). Data style only (`400` with `style: musical`).
+- pitch and loudness are still the data's; the instruments, the comping rhythm (stride piano, walking bass, funk clavinet, house off-beats, 808), swing and a drum kit change with the era. No anomaly markers in this mode (the drum kit uses the percussion channel).
+- `score.eras`: `[{key, name, start_bar, bars, start_s, time}]`; `score.bars[i].era`; an extra instrument `era_drums`.
+- `/api/sonify` and `/api/zones/zone-data` answer with `era` (the era at the start) and `eras` when `eras` is true.
 
 ### New in v2.5 (speed)
 - `mask` on `POST /api/zones/zone-data`, `/api/sonify` and `/api/zones/series`: the selected area as a zlib-compressed bitmap of the 0.1° point grid, instead of `points` (an ocean: ~3 kB instead of ~3 MB; `FRONTEND_API.md`, "mask"). Same cells, same music.

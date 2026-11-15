@@ -44,6 +44,8 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "music"))
 import groove  # noqa: E402
 import orchestra  # noqa: E402
+import eras as genres_mod  # noqa: E402
+import soundscape  # noqa: E402
 from zone_to_midi import ZONES  # noqa: E402
 
 DATA_DIR = Path(os.environ.get("JUKEBOX_DATA_DIR", ROOT / "simulation" / "output"))
@@ -51,18 +53,18 @@ CACHE_DIR = Path(os.environ.get("JUKEBOX_CACHE_DIR", ROOT / "backend" / "cache")
 # datasets converted from the team's raw folders by backend/prepare_data.py (the data folder can be read-only)
 BUILT_DIR = Path(os.environ.get("JUKEBOX_BUILT_DIR") or CACHE_DIR / "_datasets")
 CORS = [o.strip() for o in os.environ.get("JUKEBOX_CORS", "*").split(",")]
-API_VERSION = "2.6"
+API_VERSION = "2.9"
 COMPOSITION_ID = re.compile(r"[0-9a-f]{16}")         # what cache_key() produces
 # 1 = a request that names no dataset takes EACH variable from its own best dataset and the composer lines
 # them up by date (temperature since 1880 with precipitation joining in 2000 ...). The Docker image sets it:
 # there every dataset holds one variable. 0 (default) = one dataset per request, as before.
 MERGE_DATASETS = os.environ.get("JUKEBOX_MERGE_DATASETS", "0").lower() not in ("", "0", "false", "no")
-# 0 = only what the frontend uses is served: /api/instruments, /api/sonify, /api/zones/zone-data, /api/zones/series, /api/zones/groove (and /api/health).
+# 0 = only what the frontend uses is served (FRONTEND_PATHS): /api/instruments, /api/genres, /api/sonify, /api/zones/zone-data, /api/zones/series, /api/zones/groove (and /api/health).
 # The Docker image sets it. 1 (default) = also the engine's own endpoints, for development and tests.
 FULL_API = os.environ.get("JUKEBOX_FULL_API", "1").lower() not in ("", "0", "false", "no")
 CHUNK_SECONDS = float(os.environ.get("JUKEBOX_CHUNK_SECONDS", "30"))     # length of one piece of POST /api/sonify
-FRONTEND_PATHS = ("/api/health", "/api/instruments", "/api/sonify", "/api/zones/zone-data", "/api/zones/series",
-                  "/api/zones/groove")
+FRONTEND_PATHS = ("/api/health", "/api/instruments", "/api/genres", "/api/sonify", "/api/zones/zone-data",
+                  "/api/zones/series", "/api/zones/groove")
 
 app = FastAPI(title="Earth Information Jukebox: sonification API", version=API_VERSION,
               description="Turns NASA EIC intensity maps into an orchestra (MIDI + audio).")
@@ -192,7 +194,7 @@ class ComposeRequest(BaseModel):
     palette: str = Field("orchestra", description="'orchestra' (default), 'auto' (regional instruments) or a palette name")
     key: str = Field("C", description="tonic, e.g. C, D, F#, Bb")
     scale: Optional[Literal["major", "minor", "dorian", "lydian", "harmonic_minor"]] = None
-    bpm: float = Field(76, ge=30, le=200)
+    bpm: Optional[float] = Field(None, ge=30, le=200, description="tempo; default 76, or the usual tempo of the genre")
     frames_per_bar: Optional[float] = Field(None, gt=0, le=60, description="data frames per bar; default = dataset hint "
                                             "(daily data: 7 = one bar per week; monthly: 1)")
     mapping: Literal["hybrid", "relative", "absolute"] = "hybrid"
@@ -212,6 +214,17 @@ class ComposeRequest(BaseModel):
     tension: bool = Field(True, description="musical style: anomalies -> minor mode, dissonance, agitation")
     climax: bool = Field(True, description="musical style: highlight the most anomalous moment")
     humanize: float = Field(0.5, ge=0, le=1, description="musical style: phrase dynamics + human timing")
+    genre: str = Field("orchestra", description="musical genre of the whole piece (GET /api/instruments -> genres): "
+                       "orchestra (default), ragtime, swing, rocknroll, funk, synthpop, house, trap, or realistic "
+                       "(recordings: rain, fire, thunder ...; the temperature is a heartbeat)")
+    tempo_from_temperature: bool = Field(True, description="data style: each bar's tempo follows the temperature "
+                                         "(x0.75 cold .. x1.25 hot; realistic mode: a heartbeat of 60-130 bpm); with "
+                                         "duration_s the piece still lasts duration_s. false = one fixed tempo")
+    temperature_sound: Literal["heartbeat", "clock"] = Field("heartbeat", description="realistic mode: the temperature "
+                                                             "as a heartbeat or a ticking clock (its rate = the tempo)")
+    eras: bool = Field(False, description="fun mode, music through the ages: each bar is played in the style of its date, "
+                       "Romantic orchestra before 1910, ragtime, swing, rock'n'roll, funk & disco, synth-pop, house, "
+                       "modern pop / trap from 2010 (data style only)")
     include_notes: bool = Field(True, description="include every note in the response (set false for a lighter payload)")
     score_image: bool = Field(False, description="also produce a PNG of the score")
 
@@ -348,7 +361,8 @@ def health():
             "built_dir": str(BUILT_DIR), "preparing_data": (BUILT_DIR / ".preparing").exists(),
             "merge_datasets": MERGE_DATASETS, "full_api": FULL_API,
             "audio_rendering": audio_ok, "mp3_encoding": bool(shutil.which("ffmpeg")),
-            "orchestral_samples": sampler.vsco_available()}
+            "orchestral_samples": sampler.vsco_available(),
+            "realistic_sounds": soundscape.ambience_available()}
 
 
 @app.get("/api/options")
@@ -419,7 +433,9 @@ def compose(req: ComposeRequest, request: Request):
                 out_dir=folder, name="score", preview=req.score_image, render=req.audio,
                 reverb=req.reverb, audio_format=req.audio_format,
                 intro=req.intro, tension=req.tension, climax=req.climax, humanize=req.humanize,
-                style=req.style, quantize=req.quantize, markers=req.markers, audio_engine=req.audio_engine)
+                style=req.style, quantize=req.quantize, markers=req.markers, audio_engine=req.audio_engine,
+                eras=req.eras, genre=req.genre, tempo_from_temperature=req.tempo_from_temperature,
+                temperature_sound=req.temperature_sound)
         except orchestra.ComposeError as e:
             raise HTTPException(400, str(e))
         (folder / "score_preview.wav").unlink(missing_ok=True)  # rough synth preview not needed here
@@ -495,9 +511,50 @@ def request_cells(req) -> Optional[list[list[int]]]:
     return None
 
 
+GENRE_INFO = {   # id -> what the frontend shows in its genre menu
+    "orchestra": "The orchestra: piano chords, contrabass, violins, glockenspiel, timpani, trombones",
+    "ragtime": "Honky-tonk stride piano, tuba, clarinet, brushes",
+    "swing": "Jazz guitar, walking bass, trumpet, vibraphone, ride cymbal, swung eighths",
+    "rocknroll": "Electric guitar, electric bass, tenor sax, backbeat drums",
+    "funk": "Clavinet, octave bass, overdriven guitar, Hammond organ, disco drums",
+    "synthpop": "Polysynth, synth bass, square lead, synth brass, drum machine",
+    "house": "Off-beat piano and bass, saw lead, four-on-the-floor",
+    "trap": "Electric-piano arpeggios, 808 bass, synth lead, hi-hat rolls",
+    "realistic": "No instruments: the sound of each phenomenon (rain, fire, thunder, traffic ...), the temperature as a heartbeat",
+}
+
+
+def resolve_genre(genre: Optional[str]) -> str:
+    g = (genre or "orchestra").strip().lower()
+    if g in ("realistic", "realiste", "réaliste", "nature"):
+        return "realistic"
+    k = genres_mod.genre_key(g)
+    if k is None:
+        raise HTTPException(400, f"unknown genre '{genre}'; available: {list(GENRE_INFO)}")
+    return k
+
+
+def genres_list() -> list:
+    return [{"id": k, "name": genres_mod.GENRES[k]["name"] if k in genres_mod.GENRES else "Realistic sounds",
+             "bpm": genres_mod.GENRES[k]["bpm"] if k in genres_mod.GENRES else 76, "description": d}
+            for k, d in GENRE_INFO.items()]
+
+
+def instrument_for(genre: str, var: str, cfg: dict) -> str:
+    """The instrument (or sound) that plays `var` in `genre`."""
+    orig = cfg["name"].partition(" - ")[2]
+    if genre == "realistic":
+        return soundscape.SOUND_NAMES.get(var, orig)
+    if genre == "orchestra":
+        return orig
+    return genres_mod.instrument_name(genre, var, cfg["role"], orig, cfg["program"])
+
+
 @app.get("/api/instruments")
-def instruments():
-    """The datasets the frontend can ask for and the instrument that plays each one."""
+def instruments(genre: Optional[str] = None):
+    """The datasets the frontend can ask for and the instrument that plays each one (in `genre`, default the
+    orchestra), with the list of genres."""
+    gkey = resolve_genre(genre)
     ds = scan_datasets()
     rows = []
     for var, cfg in orchestra.ORCHESTRA.items():
@@ -505,6 +562,7 @@ def instruments():
         if not holders:
             continue                                              # no data for this instrument on this server
         label, _, instrument = cfg["name"].partition(" - ")
+        instrument = instrument_for(gkey, var, cfg)
         best = ds[pick_dataset([var])]["variables"][var]
         times = sorted(x for g in holders for x in g.get("times") or [])
         n = 7 if all(len({x[:7] for x in g.get("times") or []}) == len(g.get("times") or []) for g in holders) else 10
@@ -515,7 +573,14 @@ def instruments():
                      # what the webapp's InstrumentInfo declares (webapp/src/services/sonificationApi.ts)
                      "midi_program": cfg["program"], "pitch_range": [cfg["low"], cfg["high"]],
                      "role": ROLE_LABELS.get(cfg["role"], cfg["role"]), "always_playing": bool(cfg.get("always_on"))})
-    return {"palette": "orchestra", "by_dataset": {r["dataset_id"]: r["instrument"] for r in rows}, "instruments": rows}
+    out = {"palette": "orchestra", "by_dataset": {r["dataset_id"]: r["instrument"] for r in rows}, "instruments": rows}
+    return {**out, "genre": gkey} if genre else out          # without ?genre= the answer is unchanged
+
+
+@app.get("/api/genres")
+def genres():
+    """The genres the frontend can offer (send one as `genre` in POST /api/sonify or /api/zones/zone-data)."""
+    return {"default": "orchestra", "genres": genres_list()}
 
 
 class SonifyPoint(BaseModel):
@@ -536,6 +601,11 @@ class SonifyRequest(BaseModel):
                                 "instead of points (see mask_to_cells / FRONTEND_API.md)")
     time_period: Optional[str | int] = Field(None, description="where the music starts: '1880-01'")
     aggregation: Literal["mean"] = Field("mean", description="how the points are combined: the area-weighted mean")
+    genre: Optional[str] = Field(None, description="optional musical genre for the whole piece: orchestra (default), "
+                                 "ragtime, swing, rocknroll, funk, synthpop, house, trap, or realistic (sounds of rain, "
+                                 "fire, thunder ...). See GET /api/instruments -> genres. The answer then has `genre`")
+    eras: bool = Field(False, description="optional fun mode, music through the ages: the music takes the style of "
+                       "the date (Romantic orchestra in 1880 ... modern pop / trap in 2026). The answer then has `era`")
 
 
 class SonifyDebugRequest(SonifyRequest):
@@ -579,6 +649,10 @@ def make_chunk(req: SonifyRequest, request: Request, duration_s: float = CHUNK_S
     else:
         raise HTTPException(422, "points is empty: send the selected points [{lat, lng}, ...] or a mask")
     # pitch_range "series": a long series is played chunk after chunk, so a value must be the same note in each
+    if req.eras:
+        opts["eras"] = True
+    if req.genre:
+        opts["genre"] = resolve_genre(req.genre)
     body = {"pitch_range": "series", **opts, **area, "variables": variables or None, "duration_s": duration_s,
             "audio": True, "audio_format": audio_format, "include_notes": False}
     if req.time_period is not None:
@@ -607,7 +681,7 @@ def make_chunk(req: SonifyRequest, request: Request, duration_s: float = CHUNK_S
     last = times.index(end_time) if end_time in times else None
     nxt = times[last + 1][:n] if last is not None and last + 1 < len(times) else None
     first = {v: (i["values_per_beat"][0] if i.get("values_per_beat") else None, i.get("units"))
-             for v, i in score["instruments"].items() if v != "anomaly_markers"}
+             for v, i in score["instruments"].items() if v not in ("anomaly_markers", "era_drums")}
     # the main variable: the first one asked for that is actually in the piece (a variable with no data in
     # this period is left out by the composer)
     main = next((v for v in variables if v in first), None) or next(iter(first), None)
@@ -627,7 +701,12 @@ def make_chunk(req: SonifyRequest, request: Request, duration_s: float = CHUNK_S
             # {variable: dataset} when several were merged; only the variables that are in the piece
             "source_datasets": {v: k for v, k in used.items() if v in first} or None,
             "real_data": bool(info.get("real")),
-            "anomaly": bool(info.get("anomaly"))}                 # value = degC vs normal
+            "anomaly": bool(info.get("anomaly")),                 # value = degC vs normal
+            # eras mode: the musical era at the start of the chunk, and every era change inside it
+            "genre": score.get("genre", "orchestra"),
+            "era": score["eras"][0]["name"] if score.get("eras") else None,
+            "eras": [{"name": e["name"], "time_period": (e["time"] or "")[:n] or None, "start_s": e["start_s"]}
+                     for e in score["eras"]] if score.get("eras") else None}
 
 
 @app.post("/api/sonify")
@@ -635,7 +714,7 @@ def sonify(req: SonifyRequest, request: Request):
     """The frontend's call: selected points + one time period in; CHUNK_SECONDS of MP3 (base64) out, with the
     time period to ask for next."""
     chunk = make_chunk(req, request)
-    return {k: chunk[k] for k in SONIFY_FIELDS}
+    return {k: chunk[k] for k in SONIFY_FIELDS + (("era", "eras") if req.eras else ()) + (("genre",) if req.genre else ())}
 
 
 class ZoneDataRequest(SonifyRequest):
@@ -667,7 +746,9 @@ def zone_data(req: ZoneDataRequest, request: Request):
     values = {sent_id.get(v, SHORT_IDS.get(v, v)): x for v, x in chunk["values"].items() if x is not None}
     return {"zone_id": chunk["zone_id"], "dataset_ids": [sent_id.get(v, SHORT_IDS.get(v, v)) for v in chunk["values"]],
             "time_period": chunk["time_period"], "next_time_period": chunk["next_time_period"],
-            "audio_data": chunk["audio_data"], "values": values, "point_count": chunk["point_count"]}
+            "audio_data": chunk["audio_data"], "values": values, "point_count": chunk["point_count"],
+            **({"era": chunk["era"], "eras": chunk["eras"]} if req.eras else {}),
+            **({"genre": chunk["genre"]} if req.genre else {})}
 
 
 # ----------------------------------------------------------------------------

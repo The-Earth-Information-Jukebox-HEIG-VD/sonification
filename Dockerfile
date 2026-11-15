@@ -46,6 +46,10 @@ COPY soundfonts/ soundfonts/
 RUN python music/render_audio.py --download \
     && test -s soundfonts/GeneralUser-GS.sf2
 
+# the recordings of the realistic mode (rain, fire, thunder, crickets ...; CC0 / public domain / CC BY, ~30 MB)
+RUN python music/soundscape.py --download \
+    && test -s soundfonts/ambience/rain_light.flac
+
 ARG WITH_VSCO=0
 RUN if [ "$WITH_VSCO" = "1" ]; then \
         python music/sampler.py --download \
@@ -83,7 +87,7 @@ COPY --from=sounds /app/soundfonts/ soundfonts/
 #   JUKEBOX_CACHE_DIR : compositions + the converted datasets (must be writable; a volume keeps them between restarts)
 #   JUKEBOX_PREPARE   : 0 = do not convert raw data at start-up
 #   JUKEBOX_MERGE_DATASETS : 1 = each variable is read from its own dataset and they are lined up by date
-#   JUKEBOX_FULL_API  : 0 = serve only the frontend's calls (/api/instruments, /api/sonify, /api/zones/zone-data, /api/zones/series, /api/zones/groove) and /api/health;
+#   JUKEBOX_FULL_API  : 0 = serve only the frontend's calls (/api/instruments, /api/genres, /api/sonify, /api/zones/zone-data, /api/zones/series, /api/zones/groove) and /api/health;
 #                       1 = also the engine's own endpoints and http://localhost:8000/docs for them
 ENV JUKEBOX_DATA_DIR=/app/data \
     JUKEBOX_CACHE_DIR=/app/cache \

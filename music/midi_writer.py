@@ -43,6 +43,10 @@ class Track:
         self.events.append((int(round(beat * TPQ)), 0,
                             bytes([0xB0 | ch, controller & 0x7F, max(0, min(127, int(value)))])))
 
+    def program_change(self, program: int, beat: float):
+        """Change the instrument of this track's channel at `beat` (e.g. a new musical era)."""
+        self.events.append((int(round(beat * TPQ)), 0, bytes([0xC0 | (self.channel & 0x0F), program & 0x7F])))
+
     def marker(self, text: str, beat: float):
         b = text.encode("utf-8")
         self.events.append((int(round(beat * TPQ)), 2, b"\xff\x06" + _vlq(len(b)) + b))

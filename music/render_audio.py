@@ -117,11 +117,14 @@ def render(midi_path, sf2: Path, sr=44100, reverb=0.28, gain_db=-6.0, tail_s=3.0
     if engine in ("auto", "vsco"):
         import sampler
         use_vsco = sampler.vsco_available() or (engine == "vsco" and sampler.ensure_vsco())
+    changes = {}
     for ev in events:
-        if type(ev.action).__name__ == "ProgramChange" and ev.channel not in programs:
-            programs[ev.channel] = ev.action.program
-    if use_vsco:
-        vsco_ch = {ch: p for ch, p in programs.items() if ch != 9 and p in sampler.GM_TO_VSCO}
+        if type(ev.action).__name__ == "ProgramChange":
+            programs.setdefault(ev.channel, ev.action.program)
+            changes.setdefault(ev.channel, set()).add(ev.action.program)
+    if use_vsco:      # a channel that switches instrument (eras mode) stays on the SoundFont
+        vsco_ch = {ch: p for ch, p in programs.items()
+                   if ch != 9 and p in sampler.GM_TO_VSCO and len(changes.get(ch, ())) == 1}
 
     # ---- SoundFont part (every channel not handled by VSCO)
     synth = tsf.Synth(gain=gain_db, samplerate=sr)
