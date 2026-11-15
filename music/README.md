@@ -123,7 +123,7 @@ the genre (`"Rain - Tenor sax"`).
 
 **`realistic`** (`music/soundscape.py`): no instruments, the sound of each phenomenon, mixed from real recordings:
 rain (+ a downpour layer when it pours), snowy wind, campfire (+ fireplace and a low roar for big fires), real
-thunderclaps (claps per beat = lightning activity), a heartbeat (one lub-dub per beat at the CO₂'s tempo, see below; synthesised) and a heat drone for the temperature, the heartbeat for CO₂, the 50 Hz hum
+thunderclaps (claps per beat = lightning activity), a heartbeat for CO₂ (one lub-dub per beat at the world CO₂'s tempo, see below; synthesised), city traffic for the temperature, the 50 Hz hum
 of street lamps for night lights (synthesised). Levels measured per layer (about −27 dBFS for the temperature bed,
 −18 to −25 when a phenomenon is strong). The recordings (CC0 / public domain / CC BY, ~30 MB) are downloaded once
 from GitHub at pinned commits: `python music/soundscape.py --download` (credits: `soundfonts/README.md`).
@@ -145,7 +145,7 @@ see the data concerns). u = (ppm − 290) / (430 − 290): 1880 → 0, 2000 → 
 bpm × (0.8 + 0.45u). In `realistic` the soundscape builds up too:
 - the heartbeat is the sound of the CO₂ track: it plays when CO₂ is selected (even in years without CO₂ maps), at the world CO₂'s tempo, 60 + 75u bpm (60 in 1880, about 132 today), and
   turns irregular above 400 ppm: skipped beats and premature extra beats, up to about one in four;
-- the temperature becomes a low heat drone whose detuned tones beat faster and, when hot, clash with a semitone;
+- the temperature becomes the city traffic, louder when warmer;
 - the whole soundscape gets louder with the CO₂.
 `score.tempo_source` and `score.co2` (`co2_ppm_per_bar`, `urgency_per_bar`). `--tempo-source temperature` gives
 the tempo of the temperature, below.

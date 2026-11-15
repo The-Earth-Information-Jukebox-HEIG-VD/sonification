@@ -84,3 +84,47 @@ def urgency_of_times(times) -> float:
     ys = [year_of(t) for t in times]
     ys = [y for y in ys if np.isfinite(y)]
     return float(np.mean([urgency_of_ppm(co2_ppm(y)) for y in ys])) if ys else float("nan")
+
+
+# ---- completing the team's CO2 maps with the world record ------------------------------------------------------
+# The CO2 maps (NASA AIRS, SVS 5024) only cover 2002-09 -> 2022-03 and have blank areas. Where they have nothing,
+# the CO2 track takes the world record above (CO2 mixes evenly, so it is right for every region), so its line, its
+# music and its heartbeat cover 1875 -> today. The months that come from the maps are reported as "measured".
+FIRST_MONTH = "1875-01"
+
+
+def last_month() -> str:
+    """The last month the world record is used for: the previous calendar month (UTC)."""
+    import datetime as _dt
+    d = _dt.datetime.now(_dt.timezone.utc).date().replace(day=1) - _dt.timedelta(days=1)
+    return f"{d.year:04d}-{d.month:02d}"
+
+
+def month_axis(first: str, last: str) -> list[str]:
+    """'YYYY-MM' months from first to last, both included."""
+    a, b = int(first[:4]) * 12 + int(first[5:7]) - 1, int(last[:4]) * 12 + int(last[5:7]) - 1
+    return [f"{k // 12:04d}-{k % 12 + 1:02d}" for k in range(a, b + 1)]
+
+
+def world_ppm(months) -> np.ndarray:
+    """World CO2 (ppm) for each 'YYYY-MM' (the middle of the month)."""
+    return np.array([co2_ppm(year_of(m)) for m in months], dtype=np.float64)
+
+
+def complete_with_world(times, mean, first=FIRST_MONTH, last=None):
+    """Monthly frames of the CO2 maps (ISO times, one value each; NaN = no data) -> the same on the axis
+    first .. last (or their own ends if wider), the world record wherever the maps have no value.
+    Returns (times as 'YYYY-MM-15T00:00:00Z', values, measured: bool per month)."""
+    own = {str(t)[:7]: float(v) for t, v in zip(times, np.asarray(mean, dtype=np.float64))}
+    months = sorted(own)
+    axis = month_axis(min(first, months[0]) if months else first, max(last or last_month(), months[-1]) if months else (last or last_month()))
+    vals = np.array([own.get(m, np.nan) for m in axis], dtype=np.float64)
+    measured = np.isfinite(vals)
+    vals[~measured] = world_ppm([m for m, ok in zip(axis, measured) if not ok])
+    return np.array([f"{m}-15T00:00:00Z" for m in axis]), vals, measured
+
+
+def completes_team_co2(var, source) -> bool:
+    """True for the team's CO2 maps (NASA AIRS, 2002-09 -> 2022-03), the ones completed with the world record.
+    Other CO2 datasets (simulated, or NOAA's in the development dataset) are played as they are."""
+    return var == "co2" and "extracted by the team" in str(source or "")

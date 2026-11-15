@@ -5,7 +5,7 @@
     fires       -> a campfire, plus a fireplace and a low roar for big fires        loudness / size = amount
     lightning   -> real thunderclaps (5 recordings), as many as the flashes          claps per beat = activity
     (by default, tempo_source "co2": the heartbeat is the CO2 track's sound, at the world CO2's tempo,
-     irregular above 400 ppm; the temperature is then a heat drone that trembles and clashes more as it warms,
+     irregular above 400 ppm; the temperature is then the city traffic, louder when warmer,
      and the whole soundscape gets louder with the CO2; see urgency.py)
     temperature -> (tempo_source "temperature") a heartbeat, "the pulse of the planet": one beat per musical beat, and the tempo follows the
                    temperature (60 bpm, a heart at rest, when coldest -> 130 bpm when hottest; set by
@@ -81,7 +81,7 @@ TICKS = [k for k in CLIPS if k.startswith("tick_")]
 HEART_NAME = "Heartbeat (faster when warmer)"     # the temperature's sound with tempo_source "temperature"
 SOUND_NAMES = {
     "precipitation": "Rain sounds", "snowfall": "Snowy wind", "fires": "Crackling fire", "lightning": "Thunder",
-    "surface_temperature": "Heat drone (trembles and clashes when warmer)", "co2": "Heartbeat (its speed is the world's CO2)",
+    "surface_temperature": "City traffic (louder when warmer)", "co2": "Heartbeat (its speed is the world's CO2)",
     "nightlights": "Street-lamp hum", "aerosol_dust": "Desert wind", "aerosol_smoke": "Smouldering fire",
     "sea_ice": "Singing, creaking ice",
     "vegetation": "Crickets and cicadas", "carbon_monoxide": "Idling engines and smog", "chlorophyll": "Bubbling sea",
@@ -533,7 +533,8 @@ def render(layers, beat_times, total_s, seed=7, tail_s=1.0, temperature_sound="h
                     mix[i:i + len(seg), side] += seg[:, side] * g
                     mix[i:i + len(seg), 1 - side] += seg[:, 1 - side] * g * pan
         elif var == "surface_temperature" and urgency is not None:
-            mix += heat_drone(np.asarray(L["norm"], dtype=float), beat_times, n)   # the heart is the CO2's
+            # the temperature is the city traffic (the heart is the CO2's): louder when warmer
+            mix += loop(clip("city"), n, rng) * ((0.15 + 0.85 * v) * on)[:, None] * 0.55
         elif var == "surface_temperature":
             # the heartbeat beats on every beat: its speed is the tempo, which follows the temperature
             vals = np.asarray(L["norm"], dtype=float)

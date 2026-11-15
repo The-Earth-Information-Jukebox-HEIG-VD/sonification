@@ -46,6 +46,7 @@ import groove  # noqa: E402
 import orchestra  # noqa: E402
 import eras as genres_mod  # noqa: E402
 import soundscape  # noqa: E402
+import urgency  # noqa: E402
 from zone_to_midi import ZONES  # noqa: E402
 
 DATA_DIR = Path(os.environ.get("JUKEBOX_DATA_DIR", ROOT / "simulation" / "output"))
@@ -53,7 +54,7 @@ CACHE_DIR = Path(os.environ.get("JUKEBOX_CACHE_DIR", ROOT / "backend" / "cache")
 # datasets converted from the team's raw folders by backend/prepare_data.py (the data folder can be read-only)
 BUILT_DIR = Path(os.environ.get("JUKEBOX_BUILT_DIR") or CACHE_DIR / "_datasets")
 CORS = [o.strip() for o in os.environ.get("JUKEBOX_CORS", "*").split(",")]
-API_VERSION = "2.15"
+API_VERSION = "2.16"
 COMPOSITION_ID = re.compile(r"[0-9a-f]{16}")         # what cache_key() produces
 # 1 = a request that names no dataset takes EACH variable from its own best dataset and the composer lines
 # them up by date (temperature since 1880 with precipitation joining in 2000 ...). The Docker image sets it:
@@ -583,6 +584,9 @@ def instruments(genre: Optional[str] = None):
                      # what the webapp's InstrumentInfo declares (webapp/src/services/sonificationApi.ts)
                      "midi_program": cfg["program"], "pitch_range": [cfg["low"], cfg["high"]],
                      "role": ROLE_LABELS.get(cfg["role"], cfg["role"]), "always_playing": bool(cfg.get("always_on"))})
+        if times and urgency.completes_team_co2(var, best.get("source")):   # completed with the world record
+            rows[-1].update(first_time_period=urgency.FIRST_MONTH, last_time_period=urgency.last_month(),
+                            measured_first_time_period=times[0][:7], measured_last_time_period=times[-1][:7])
     out = {"palette": "orchestra", "by_dataset": {r["dataset_id"]: r["instrument"] for r in rows}, "instruments": rows}
     return {**out, "genre": gkey} if genre else out          # without ?genre= the answer is unchanged
 
@@ -691,6 +695,11 @@ def make_chunk(req: SonifyRequest, request: Request, duration_s: float = CHUNK_S
     # the period right after this chunk, in the same form as time_period ('2024-03', or a day for daily data)
     times = sorted({x for k in set(used.values()) for x in ds[k].get("times") or []}) if used \
         else (group.get("times") or [])
+    co2_src = ds.get(used.get("co2") if used else out["request"]["dataset"], {}).get("variables", {}).get("co2", {})
+    if (not used or "co2" in used) and urgency.completes_team_co2("co2", co2_src.get("source")):
+        have = {t[:7] for t in times}       # the CO2 goes on with the world record: its months count for next_time_period
+        times = sorted(set(times) | {f"{m}-15T00:00:00Z" for m in urgency.month_axis(urgency.FIRST_MONTH, urgency.last_month())
+                                     if m not in have})
     n = 7 if len({t[:7] for t in times}) == len(times) else 10
     end_time = score.get("time_last_frame") or score["time_end"]       # the last frame played, not the start of the last bar
     last = times.index(end_time) if end_time in times else None
@@ -959,7 +968,7 @@ def area_monthly_series(cells: list, digest: str, ds_id: str, var: str) -> Optio
     """One entry of the "series" of POST /api/zones/series (cached). None when the dataset has no time axis."""
     g = scan_datasets()[ds_id]
     path = g["file_of"][var]
-    key = (digest, ds_id, var, path.stat().st_mtime)
+    key = (digest, ds_id, var, path.stat().st_mtime, urgency.last_month())
     hit = SERIES_CACHE.get(key)
     if hit is not None:
         return hit
@@ -968,12 +977,20 @@ def area_monthly_series(cells: list, digest: str, ds_id: str, var: str) -> Optio
         if "time" not in z.files or not len(z["time"]):
             return None
         mean, _, times, _ = orchestra.area_series((z, meta), cells, POINT_GRID)
+        measured = None
+        if urgency.completes_team_co2(var, meta.get("source")):   # the world record where the maps have nothing
+            times, mean, ok = urgency.complete_with_world(times, mean)
+            measured = [str(t)[:7] for t, m in zip(times, ok) if m]
         start, values = monthly_values(mean, times)
     info = g["variables"][var]
     entry = {"units": display_units(info), "anomaly": bool(info.get("anomaly")), "start": start,
              # one map per year (night lights), repeated for its 12 months
              "yearly": meta.get("source_time_step") == "1 year" or var == "nightlights",
              "values": values}
+    if measured is not None:
+        # which months are the maps' own values; the others are the world CO2 record (Law Dome, Mauna Loa)
+        entry["measured"] = {"first": measured[0], "last": measured[-1]} if measured else None
+        entry["filled_with"] = "world CO2 record (Law Dome ice cores, Mauna Loa)"
     SERIES_CACHE.put(key, entry)
     return entry
 

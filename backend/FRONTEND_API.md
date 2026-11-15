@@ -1,6 +1,6 @@
 # The API the frontend uses
 
-API v2.15. The frontend calls `GET /api/genres`, `GET /api/instruments`, `POST /api/zones/zone-data`, `POST /api/zones/series` and `POST /api/zones/groove` (plus `GET /api/health`); none has required options. Optional extras of section 2 (API v2.7–2.13): a musical `genre` (with `GET /api/genres` for the menu), music through the ages (`eras`), the CO₂ that sets the tempo, and the same month year after year (`step`).
+API v2.16. The frontend calls `GET /api/genres`, `GET /api/instruments`, `POST /api/zones/zone-data`, `POST /api/zones/series` and `POST /api/zones/groove` (plus `GET /api/health`); none has required options. Optional extras of section 2 (API v2.7–2.13): a musical `genre` (with `GET /api/genres` for the menu), music through the ages (`eras`), the CO₂ that sets the tempo, and the same month year after year (`step`).
 
 - Base URL: the backend, e.g. `http://localhost:8000` (behind the webapp's nginx: the same origin, `/api/...`).
 - Everything is JSON. Errors have a `detail` message.
@@ -26,7 +26,7 @@ One entry per dataset the server has data for:
 | `dataset_id` | instrument | units | data |
 |---|---|---|---|
 | `temperature` | Piano (chords) | °C anomaly | 1880-01 → 2025-12 |
-| `co2` | Contrabass | ppm | 2002-09 → 2022-03 |
+| `co2` | Contrabass | ppm | 1875-01 → last month: our CO₂ maps (2002-09 → 2022-03), completed with the world CO₂ record (v2.16) |
 | `precipitation` | Violins (melody) | mm/day of rain | 2000-06 → 2026-11 |
 | `snow` | Glockenspiel (melody) | mm/day of melted water | 2000-06 → 2026-11 |
 | `fires` | Trombones | days of the month with a fire | 2002-07 → 2026-11 |
@@ -127,7 +127,7 @@ gets `"genre": "rocknroll"`.
 | fires | campfire, plus a fireplace and a low roar for big fires | loudness and size = number of fire days |
 | lightning | real thunderclaps | how often = lightning activity |
 | co2 | a heartbeat, the "pulse of the planet" (synthesised); it beats only when `co2` is selected, even in years without CO₂ maps | it beats on every beat of the tempo, which follows the global CO₂: 60 bpm (a heart at rest) in 1880, about 103 in 2000, 132 today; irregular (skipped and extra beats) above 400 ppm, from 2015 |
-| temperature | a low heat drone (synthesised) | warmer = its tones tremble faster, and a clashing semitone joins when hot |
+| temperature | city traffic (recording) | louder when warmer |
 | night_lights | the 50 Hz hum of street lamps | loudness = brightness |
 | sea_ice | "singing" ice: falling pings of cracks and low creaks of floes (synthesised) | how often = how much ice |
 | vegetation | crickets and a cicada (synthesised) | loudness = how green |
@@ -220,6 +220,7 @@ No audio: one value per month for each requested dataset, the same area-weighted
 - `start` is **per dataset**: the first month of that dataset's own data (temperature 1880-01, precipitation 2000-06, night lights 2012-01 ...), the same as its `first_time_period` in `GET /api/instruments`.
 - `units` is the same text as `units` in `GET /api/instruments`; `anomaly: true` = degrees away from a normal.
 - `yearly: true` (`night_lights`): one map per year, so the 12 months of a year have the same value. Draw it as steps.
+- `co2` (v2.16): the CO₂ maps only cover 2002-09 → 2022-03 and have blank areas (e.g. all of Switzerland), so the series is completed with the world CO₂ record (Law Dome ice cores, Mauna Loa) from 1875-01 to the previous month, and has no `null`. Two extra fields say which part is measured: `"measured": {"first": "2002-09", "last": "2022-03"}` (`null` when the area has no measured month at all) and `"filled_with": "world CO2 record (Law Dome ice cores, Mauna Loa)"`. Draw the measured part solid and the rest dashed, for example. `GET /api/instruments` gives `first_time_period: "1875-01"`, `last_time_period` = the previous month, and `measured_first_time_period` / `measured_last_time_period` for the maps. The music does the same: the contrabass (and in `realistic` the heartbeat) plays wherever the line is drawn.
 - Daily data is averaged per month.
 - `missing`: the requested ids the server has no data for. They are left out of `series`, not an error, as long as one id is known.
 - **Errors**: `400` when none of the ids is known (same message as zone-data); `422` malformed request (no points and no mask, more than 20 000 points, an invalid `mask`, no `dataset_ids`, another `aggregation`).

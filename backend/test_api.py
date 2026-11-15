@@ -544,7 +544,7 @@ def test_genres():
     j = client.get("/api/instruments?genre=rocknroll").json()
     assert j["genre"] == "rocknroll" and "guitar" in j["by_dataset"]["temperature"].lower()
     assert client.get("/api/instruments").json()["by_dataset"]["temperature"] == "Piano (chords)"
-    assert "Heat drone" in client.get("/api/instruments?genre=realistic").json()["by_dataset"]["temperature"]
+    assert "City traffic" in client.get("/api/instruments?genre=realistic").json()["by_dataset"]["temperature"]
     assert client.get("/api/instruments?genre=polka").status_code == 400
     if not TEMP_HISTORY:
         print("skip: no temperature anomaly dataset"); return
@@ -568,7 +568,7 @@ def test_genres():
     s = client.post("/api/compose", json={**base, "genre": "realistic", "end": "2001-12", "frames_per_bar": 1,
                                           "audio": True}).json()
     assert s["score"]["genre"] == "realistic" and 55 <= s["score"]["tempo_range"][0] <= s["score"]["tempo_range"][1] <= 135
-    assert s["score"]["instruments"]["surface_temperature"]["name"].startswith("Temperature - Heat drone")
+    assert s["score"]["instruments"]["surface_temperature"]["name"].startswith("Temperature - City traffic")
     if client.get("/api/health").json().get("realistic_sounds"):
         assert s["files"]["audio"]
     # the frontend's call: an alias works and the genre comes back
@@ -645,4 +645,4 @@ def test_co2_tempo():
     r = client.post("/api/compose", json={"dataset": TEMP_HISTORY, "zone": "global", "start": "2020-01",
                                           "duration_s": 30, "audio": False, "genre": "realistic"}).json()["score"]
     assert abs(r["duration_s"] - 30) < 0.05 and min(x["bpm"] for x in r["tempo_map"]) > 120
-    assert r["instruments"]["surface_temperature"]["name"].startswith("Temperature - Heat drone")
+    assert r["instruments"]["surface_temperature"]["name"].startswith("Temperature - City traffic")

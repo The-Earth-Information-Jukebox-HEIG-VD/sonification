@@ -271,6 +271,10 @@ All fields are optional. The smallest request is `{}` (global zone, default data
 
 ```
 
+### New in v2.16 (traffic for the temperature, CO2 completed with the world record)
+- CO2 completed with the world record: the CO2 maps (2002-09 → 2022-03, blank areas such as Switzerland) are filled with the world CO2 record of v2.13 (`urgency.py`: Law Dome, Mauna Loa) wherever they have no value, from 1875-01 to the previous month. In the music (`orchestra.compose(co2_world=True)`, the default), in `POST /api/zones/series` (with `measured` and `filled_with`), in `GET /api/instruments` (`first/last_time_period` and `measured_first/last_time_period`) and in `next_time_period`. So the CO2 track, its line and its heartbeat always go together.
+- `realistic`: the temperature is now the city traffic recording, louder when warmer, instead of the heat drone. The CO2 is still the heartbeat and carbon monoxide still the idling engines.
+
 ### New in v2.15 (the heartbeat is the CO2 track)
 - `realistic`: the heartbeat is now the sound of the CO2 track. It beats only when `co2` is selected (in place of the city traffic), and also in the years the CO2 maps do not cover (before 2002-09, after 2022-03), because its speed is the world CO2 record of v2.13, as before. Without `co2`, no heartbeat. With `tempo_source: "temperature"` nothing changes (city traffic for CO2).
 

@@ -1018,7 +1018,7 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
             intro=True, tension=True, climax=True, humanize=0.5,
             style="data", quantize="scale", markers=True, marker_threshold=1.5, audio_engine="auto",
             cells=None, cells_grid=None, duration_s=None, pitch_range="window", series_in=None, eras=False,
-            genre="orchestra", tempo_from_temperature=True, temperature_sound="heartbeat", step="month",
+            genre="orchestra", tempo_from_temperature=True, temperature_sound="heartbeat", step="month", co2_world=True,
             tempo_source="co2"):
     """Data maps -> score. Writes MIDI (+ stems, JSON, optional PNG/audio) to out_dir and returns
     a dict with the score document, file paths and stats.
@@ -1068,7 +1068,10 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
     step: "month" (default: one bar per month, as the data comes) or "year": the SAME month of successive years,
     one bar each (start "2020-11" -> November 2020, November 2021, ...), for monthly data. The month is the one of
     `start` (else of the first date). The pitch scale is then the range of that month's values over the years, so
-    a warmer November is a higher note than a colder November, and the seasons do not swamp the difference."""
+    a warmer November is a higher note than a colder November, and the seasons do not swamp the difference.
+
+    co2_world (default True): the CO2 maps (2002-09 -> 2022-03, with blank areas) are completed with the world CO2
+    record (urgency.py) wherever they have no value, from 1875 to the previous month, so the CO2 track always plays."""
     log = print if verbose else (lambda *a, **k: None)
     if style not in ("data", "musical"):
         raise ComposeError("style must be 'data' or 'musical'")
@@ -1154,6 +1157,11 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
                 m = area_mean(z, mask)
         except ValueError as e:
             raise ComposeError(str(e))
+        import urgency as _urg
+        if co2_world and _urg.completes_team_co2(var, meta.get("source")) and times is not None                 and len({str(t)[:7] for t in times}) == len(times):
+            # the team's CO2 maps cover 2002-09 -> 2022-03 and have blank areas: the world record fills the rest, so
+            # the CO2 track plays (and its heartbeat beats) wherever its line is drawn, from 1875 to today
+            times, m, _ = _urg.complete_with_world(times, m)
         # anomaly vs the seasonal normal, computed on the FULL series before any time window
         _, zsc, _ = comp.seasonal_anomaly(m, times, log=var in comp.SKEWED,
                                           already_anomaly=bool(meta.get("anomaly")))
