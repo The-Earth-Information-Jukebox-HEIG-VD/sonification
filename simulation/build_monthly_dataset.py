@@ -23,6 +23,9 @@ Input  (from the data-extraction side, monthly, on the team's 0.25 deg common gr
     co2_<YYYY>_<MM>.npy                         (--co2 DIR, one file per month, 2002-09 -> 2022-03)
         [720,1440] float32, ppm, 0.25 deg (row 0 = north, column 0 = 180W,
         like the other files; that folder has no README)
+    sea_ice_<YYYY>_<MM>.npy                     (--sea_ice DIR, one file per month, 1979-01 ->)
+        [720,1440] float16, sea ice concentration in % of the cell (0-100), NaN on land. The source has no
+        December 1987 and January 1988 (a satellite gap): those two months are kept as "no data"
 
 Any .npy grid that covers 360 deg of longitude in W columns is read: step = 360 / W, and the H rows are
 centred on the equator (rows missing at the poles become NaN).
@@ -35,6 +38,7 @@ Output (one monthly time axis, one frame = one bar):
       snowfall              REAL  mm/day of melted water (snow_mmh * 24), vmin/vmax 0..3
       fires                 REAL  fire days per month (mean over the area), vmin/vmax 0..8
       nightlights           REAL  brightness 0-1, vmin/vmax 0..0.1, one value per year held for 12 months
+      sea_ice               REAL  sea ice concentration in % (mean over the sea part of the area), vmin/vmax 0..100
       surface_temperature   REAL  temperature ANOMALY in degC (meta "anomaly": true), played by the piano like the
                                   temperature of the other datasets; vmin/vmax -5..+5 instead of -40..+40.
                                   The source is a 2 deg map copied onto 0.25 deg, so `--res 2` loses nothing.
@@ -125,9 +129,37 @@ SOURCES["fires"] = dict(pattern="fires_*_*.npy", reader="monthly_npy", factor=1.
                         units="fire days per month", vmin=0.0, vmax=8.0,
                         source="NASA MODIS active fires (Terra + Aqua, GIBS layer MODIS_Combined_Thermal_Anomalies_All), "
                                "days of the month with at least one fire per 0.25 deg pixel, extracted by the team (REAL)")
+# sea ice concentration: % of each 0.25 deg cell covered by ice (0-100), NaN on land, so the mean over an area
+# is the share of its SEA that is frozen. The source misses December 1987 and January 1988 (a gap between two
+# satellites): `fill_gaps` keeps them as NaN months (the instrument rests) instead of refusing the folder.
+SOURCES["sea_ice"] = dict(pattern="sea_ice_*_*.npy", reader="monthly_npy", factor=1.0,
+                          units="% of the sea covered by ice", vmin=0.0, vmax=100.0, fill_gaps=True,
+                          source="NSIDC Sea Ice Index, monthly sea ice concentration (% of each 0.25 deg cell), "
+                                 "1979 -> 2026, extracted by the team (REAL)")
 INPUT_ARGS = {"precipitation": "precip", "surface_temperature": "temperature", "co2": "co2",
               "lightning": "lightning", "snowfall": "snow", "nightlights": "nightlights",
-              "fires": "fires"}                                                            # variable -> option
+              "fires": "fires", "sea_ice": "sea_ice"}                                      # variable -> option
+
+
+def fill_month_gaps(months: list, data: np.ndarray, days: list):
+    """Insert a NaN frame (0 days of data) for every month missing between the first and the last one."""
+    idx = [int(m[:4]) * 12 + int(m[5:7]) - 1 for m in months]
+    full = list(range(idx[0], idx[-1] + 1))
+    if len(full) == len(idx):
+        return months, data, days, []
+    pos = {k: i for i, k in enumerate(idx)}
+    out = np.full((len(full),) + data.shape[1:], np.nan, dtype=data.dtype)
+    out_days, out_months, missing = [], [], []
+    for j, k in enumerate(full):
+        m = f"{k // 12:04d}-{k % 12 + 1:02d}"
+        out_months.append(m)
+        if k in pos:
+            out[j] = data[pos[k]]
+            out_days.append(days[pos[k]])
+        else:
+            out_days.append(0)
+            missing.append(m)
+    return out_months, out, out_days, missing
 
 
 def block_mean(stack: np.ndarray, f: int, area: np.ndarray) -> np.ndarray:
@@ -278,6 +310,8 @@ def main():
     ap.add_argument("--lightning", help="folder with lightning_<YYYY>_<MM>.npy (share of each pixel with lightning, 0-1)")
     ap.add_argument("--snow", help="folder with snow_<YYYY>_<MM>.npy (mm/h of melted water)")
     ap.add_argument("--fires", help="folder with fires_<YYYY>_<MM>.npy (days of the month with a fire, 0-31)")
+    ap.add_argument("--sea_ice", "--sea-ice", dest="sea_ice",
+                    help="folder with sea_ice_<YYYY>_<MM>.npy (sea ice concentration, %% of each cell, NaN on land)")
     ap.add_argument("--nightlights", help="folder with nightlights_<YYYY>.npy, ONE MAP PER YEAR (brightness 0-1); "
                                           "each map is repeated for the 12 months of its year")
     ap.add_argument("--res", type=float, default=1.0, choices=[0.25, 0.5, 1.0, 2.0], help="output grid in degrees")
@@ -310,6 +344,10 @@ def main():
         if not keep:
             raise SystemExit("no months left in the requested window")
         months, data, days = [months[i] for i in keep], data[keep], [days[i] for i in keep]
+        if SOURCES[var].get("fill_gaps"):
+            months, data, days, missing = fill_month_gaps(months, data, days)
+            if missing:
+                print(f"  {var}: no data for {', '.join(missing)} (kept as empty months)")
         idx = [int(m[:4]) * 12 + int(m[5:7]) for m in months]
         gaps = [f"{months[i]} -> {months[i + 1]}" for i in range(len(idx) - 1) if idx[i + 1] - idx[i] != 1]
         if gaps:

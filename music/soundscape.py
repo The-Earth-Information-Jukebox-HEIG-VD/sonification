@@ -11,6 +11,8 @@
     CO2         -> city traffic                                                     loudness = level
     night lights-> the 50 Hz hum of street lamps (synthesised)                      loudness = brightness
     dust        -> desert wind;  smoke -> a smouldering fire
+    sea ice     -> "singing" ice: falling pings of cracks running through the ice, and low creaks of floes,
+                   more of them with more ice (synthesised)                         pings per beat = amount
 
 The recordings are free (CC0, public domain, CC BY), downloaded once from GitHub at pinned commits and prepared
 here (cut, loops made seamless, levels matched): `python music/soundscape.py --download`. Credits in
@@ -74,6 +76,7 @@ SOUND_NAMES = {
     "precipitation": "Rain sounds", "snowfall": "Snowy wind", "fires": "Crackling fire", "lightning": "Thunder",
     "surface_temperature": "Heartbeat (faster when warmer)", "co2": "City traffic",
     "nightlights": "Street-lamp hum", "aerosol_dust": "Desert wind", "aerosol_smoke": "Smouldering fire",
+    "sea_ice": "Singing, creaking ice",
 }
 
 
@@ -289,6 +292,44 @@ def clock(beat_times, values, n, rng):
     return out
 
 
+def _ice_ping(rng, dur=0.35):
+    """'Singing' ice: the falling 'pew' of a crack travelling through a sheet of ice (high frequencies arrive
+    first), a sine sweeping down from 2-4 kHz with a sharp attack, plus a tiny click."""
+    t = np.arange(int(dur * SR)) / SR
+    f0, f1 = rng.uniform(2000, 4000), rng.uniform(250, 500)
+    f = f1 + (f0 - f1) * np.exp(-t / rng.uniform(0.03, 0.06))
+    y = np.sin(2 * np.pi * np.cumsum(f) / SR) * (1 - np.exp(-t / 0.002)) * np.exp(-t / (dur / 3))
+    click = rng.standard_normal(len(t)) * np.exp(-t / 0.002) * 0.3
+    return (y + click).astype(np.float32)
+
+
+def _ice_creak(rng, dur=0.6):
+    """A low creak of ice floes pressing together: a rough, wobbling buzz around 70-140 Hz."""
+    t = np.arange(int(dur * SR)) / SR
+    f = rng.uniform(70, 140) * (1 + 0.15 * np.sin(2 * np.pi * rng.uniform(3, 9) * t)) * (1 + rng.uniform(-.2, .2) * t)
+    phase = np.cumsum(f) / SR
+    y = 2 * (phase % 1.0) - 1                                       # sawtooth: many harmonics, heard on small speakers
+    y *= np.sin(np.pi * np.clip(t / dur, 0, 1)) ** 2 * (0.6 + 0.4 * rng.random(len(t)))
+    return np.tanh(2 * y).astype(np.float32)
+
+
+def ice(beat_times, pres, n, rng):
+    """Sea ice: pings and creaks scattered over each beat, more of them with more ice (pres 0..1 per beat)."""
+    out = np.zeros((n, 2), np.float32)
+    for b, pr in enumerate(pres):
+        if not pr > 0 or b + 1 >= len(beat_times):
+            continue
+        for kind, rate, gain in ((_ice_ping, 0.25 + 1.2 * pr, 0.35), (_ice_creak, 0.05 + 0.25 * pr, 0.22)):
+            for _ in range(rng.poisson(rate)):
+                g = kind(rng)
+                i = int((beat_times[b] + rng.uniform(0, beat_times[b + 1] - beat_times[b])) * SR)
+                seg = g[: max(0, n - i)] * gain * (0.5 + 0.5 * pr) * rng.uniform(0.6, 1.0)
+                pan = rng.uniform(0.2, 0.8)
+                out[i:i + len(seg), 0] += seg * (1 - pan) * 2
+                out[i:i + len(seg), 1] += seg * pan * 2
+    return out
+
+
 def roar(n, rng):
     """The low roar of a big fire: brown noise below 250 Hz with a flickering level."""
     x = np.cumsum(rng.standard_normal((n, 2)), 0).astype(np.float32)
@@ -347,6 +388,8 @@ def render(layers, beat_times, total_s, seed=7, tail_s=1.0, temperature_sound="h
             mix += hum(n, rng) * p[:, None] * 0.35
         elif var == "aerosol_dust":
             mix += loop(clip("wind", lo=250, hi=4000), n, rng) * (p ** 0.8)[:, None] * 0.9
+        elif var == "sea_ice":
+            mix += ice(beat_times, pres, n, rng)
     if np.any(heart):
         # ducking ("pumping"): on every beat the other sounds dip for a moment, so the pulse always comes through
         # and the whole soundscape breathes with it: the urgency is felt, not only heard

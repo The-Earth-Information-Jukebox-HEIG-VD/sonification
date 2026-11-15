@@ -63,7 +63,7 @@ ERAS = [
          harmony=("arp", 4), bass=("808", 38), melody=87, swell=95, timpani=118,
          vars={"snowfall": 10, "aerosol_dust": 75, "aerosol_smoke": 63}),
 ]
-KEEP_VARS = {"nightlights"}        # already an electronic pad: the same sound in every era
+KEEP_VARS = {"nightlights", "sea_ice"}   # already synthetic pads (lamps, bowed glass): the same sound in every era
 ERA_BY_KEY = {e["key"]: e for e in ERAS}
 GENRES = ERA_BY_KEY                # genre id -> style; "orchestra" = the normal orchestra (no change)
 GENRE_ALIASES = {"classical": "orchestra", "classic": "orchestra", "jazz": "swing", "bigband": "swing",

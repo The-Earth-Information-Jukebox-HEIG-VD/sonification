@@ -11,7 +11,9 @@ import numpy as np
 # How much each variable's anomaly contributes to musical tension, and in which direction.
 #   "abs": both too high and too low are tense (temperature, rain)
 #   "pos": only above normal is tense (smoke, lightning, dust, CO2)
+#   "neg": only below normal is tense (sea ice: less ice than the season's normal)
 TENSION_WEIGHTS = {
+    "sea_ice": (0.5, "neg"),
     "surface_temperature": (1.0, "abs"),
     "precipitation": (0.5, "abs"),
     "snowfall": (0.4, "pos"),
@@ -83,7 +85,7 @@ def tension_curve(bar_z: dict, smooth: float = 0.5) -> np.ndarray:
     raw = np.zeros(n)
     for var, z in bar_z.items():
         w, mode = TENSION_WEIGHTS.get(var, (0.3, "abs"))
-        zz = np.nan_to_num(np.abs(z) if mode == "abs" else np.clip(z, 0, None))
+        zz = np.nan_to_num(np.abs(z) if mode == "abs" else np.clip(-z if mode == "neg" else z, 0, None))
         raw = np.maximum(raw, w * zz)
     t = np.clip((raw - 0.5) / 2.0, 0, 1)      # |z| < 0.5 = normal; |z| >= 2.5 = maximum tension
     out = np.zeros(n)                          # smooth so the music doesn't flicker

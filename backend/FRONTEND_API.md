@@ -12,7 +12,7 @@ Four calls, no required options. (API v2.6: section 4, vinyl mode, is new.) Opti
   "palette": "orchestra",
   "by_dataset": {"temperature": "Piano (chords)", "co2": "Contrabass", "precipitation": "Violins (melody)",
                  "snow": "Glockenspiel (melody)", "fires": "Trombones", "lightning": "Timpani",
-                 "night_lights": "Synth pad"},
+                 "night_lights": "Synth pad", "sea_ice": "Bowed glass (melody)"},
   "instruments": [
     {"dataset_id": "temperature", "name": "Temperature", "instrument": "Piano (chords)", "units": "degC anomaly",
      "first_time_period": "1880-01", "last_time_period": "2025-12",
@@ -32,8 +32,11 @@ One entry per dataset the server has data for:
 | `fires` | Trombones | days of the month with a fire | 2002-07 → 2026-11 |
 | `lightning` | Timpani | share of the area with lightning (0–1) | 2017-03 → 2023-07 |
 | `night_lights` | Synth pad | brightness (0–1) | 2012-01 → 2023-12, one value per year |
+| `sea_ice` | Bowed glass (melody) | % of the sea covered by ice | 1979-01 → 2026-10, no value in 1987-12 and 1988-01 |
 
-`dataset_id` is what you send below, and it is the file prefix of the dataset's folder in the data volume (`fires`, `co2`, `lightning`) wherever the two can match. Also accepted: `co2_atmosphere` for `co2`, `wildfires` for `fires`, `rain` for `precipitation`, `snowfall` for `snow`, `nightlights` for `night_lights`.
+`dataset_id` is what you send below, and it is the file prefix of the dataset's folder in the data volume (`fires`, `co2`, `lightning`) wherever the two can match. Also accepted: `co2_atmosphere` for `co2`, `wildfires` for `fires`, `rain` for `precipitation`, `snowfall` for `snow`, `nightlights` for `night_lights`, `ice` and `seaice` for `sea_ice`.
+
+`sea_ice` has no value on land: over an area it is the share of the sea that is frozen. Over land only (a country without coast) it is `null` or 0 and the bowed glass stays silent; it enters above about 5 % of ice.
 
 ## 2. Points + a time period in, music out
 
@@ -123,6 +126,7 @@ gets `"genre": "rocknroll"`.
 | temperature | a heartbeat, the "pulse of the planet" (synthesised) | it beats on every beat of the tempo: 60 bpm (a heart at rest) when cold, up to 130 bpm when hot; louder too |
 | co2 | city traffic | loudness = CO₂ level |
 | night_lights | the 50 Hz hum of street lamps | loudness = brightness |
+| sea_ice | "singing" ice: falling pings of cracks and low creaks of floes (synthesised) | how often = how much ice |
 
 ### Optional: music through the ages (`"eras": true`)
 A fun mode, off by default. Add `"eras": true` to either call and the music takes the style of its date:

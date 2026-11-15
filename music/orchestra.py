@@ -15,6 +15,7 @@ Arranged "like a conductor":
     melody   G4..E6 (8va) snowfall             Glockenspiel            pitch = value while it snows
     melody   C5..A6       aerosol_dust         Flute                   pitch = value while dust is present
     melody   F3..D5       aerosol_smoke        French horns            pitch = value while smoke is present
+    melody   D5..A6       sea_ice              Bowed glass             pitch = share of the sea frozen, where there is ice
     timpani  E2..G3       lightning            Timpani                 hits per beat = flash density, pitch = value
     swell    E2..C4       fires                Trombones               held, louder with more fires
     pad      D4..A5       nightlights          Synth pad               a note per year, fading slowly over the year
@@ -100,6 +101,13 @@ ORCHESTRA = {
     "nightlights":         dict(name="Night lights - Synth pad", role="swell", program=89, channel=7,
                                 low=62, high=81, gain=2.0, gate=0.03, levels=[0.35, 0.65], level=0.60, pan=52,
                                 smooth=False, fade=True, fade_floor=0.75),    # 0.75: ends about 10 dB under the piano
+    # sea ice (% of the sea that is frozen): bowed glass, high and sustained (the choice planned in music/README.md).
+    # Pitch = how much ice, loudness = amount: it rises every winter and thins out every summer, and the summer lows
+    # get lower and quieter over the decades, so the loss is heard as absence. Only where there is sea ice: it enters
+    # above about 5 % of the sea frozen (gain x share >= gate), so it is silent over land and warm seas.
+    # D5..A6, above the violins' usual range; channel 10 (0-8 are taken, 9 is the GM drum channel).
+    "sea_ice":             dict(name="Sea ice - Bowed glass (melody)", role="melody", program=92, channel=10,
+                                low=74, high=93, gain=1.5, gate=0.08, levels=[0.45, 0.75], level=0.80, pan=84),
 }
 # ----------------------------------------------------------------------------
 # Regional palettes (fun!): same roles and registers, local instruments.

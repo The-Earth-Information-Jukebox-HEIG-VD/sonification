@@ -314,3 +314,40 @@ def test_fires(tmp_path):
     assert meta["variable"] == "fires" and meta["units"] == "fire days per month" and meta["vmax"] == 8 and meta["real"] is True
     assert np.allclose(z["intensity"][0][belt], 1.0)                 # 12 days is far above the top of the range
 
+
+
+def fake_sea_ice(folder: Path, months: list[str]):
+    """sea_ice_<YYYY>_<MM>.npy like the team's: 720 x 1440 float16, % of each cell covered by ice, NaN on land.
+    North of 80N frozen (90 %, - 10 per month), the rest of the sea open (0 %), a land block (NaN) at 0-10N 0-10E."""
+    for i, m in enumerate(months):
+        a = np.zeros((720, 1440), np.float16)
+        a[:40] = 90 - 10 * i
+        a[320:360, 720:760] = np.nan
+        np.save(folder / f"sea_ice_{m.replace('-', '_')}.npy", a)
+
+
+def test_sea_ice_keeps_the_satellite_gap_as_empty_months(tmp_path):
+    src, out = tmp_path / "ice", tmp_path / "out"
+    src.mkdir()
+    fake_sea_ice(src, ["1987-10", "1987-11", "1988-02", "1988-03"])   # the source misses 1987-12 and 1988-01
+    r = run("--sea_ice", src, "--out", out, "--res", 2)
+    assert r.returncode == 0, r.stderr
+    assert "no data for 1987-12, 1988-01" in r.stdout
+    z = np.load(out / "real_monthly_1987_1988_sea_ice.npz")
+    meta = json.loads((out / "real_monthly_1987_1988_sea_ice.json").read_text())
+    assert [str(t)[:7] for t in z["time"]] == ["1987-10", "1987-11", "1987-12", "1988-01", "1988-02", "1988-03"]
+    lat, lon = z["lat"], z["lon"]
+    north = lat > 80
+    assert np.allclose(z["data"][0][north], 90) and np.allclose(z["data"][3 + 1][north], 70)   # 1988-02 = 3rd file
+    assert np.all(np.isnan(z["data"][2])) and np.all(np.isnan(z["data"][3]))                   # the gap: no data
+    land = np.ix_((lat > 0) & (lat < 10), (lon > 0) & (lon < 10))
+    assert np.all(np.isnan(z["data"][0][land])) and np.all(z["data"][0][(lat < 60) & (lat > 20)] == 0)
+    assert meta["variable"] == "sea_ice" and meta["vmin"] == 0 and meta["vmax"] == 100 and meta["real"] is True
+    assert meta["partial_months"] == {"1987-12": 0, "1988-01": 0}     # (a gap in another variable is still refused:
+                                                                       # test_missing_month_is_refused)
+
+
+def test_help_prints():
+    """The Docker build runs `build_monthly_dataset.py --help`: a bare % in an option's help breaks it."""
+    r = run("--help")
+    assert r.returncode == 0 and "--sea_ice" in r.stdout, r.stderr

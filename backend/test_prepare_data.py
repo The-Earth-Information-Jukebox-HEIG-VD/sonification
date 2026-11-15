@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "simulation"))
 sys.path.insert(0, str(ROOT / "music"))
 from test_build_monthly_dataset import (fake_co2, fake_fires, fake_lightning, fake_nightlights,  # noqa: E402
-                                         fake_precip_monthly, fake_split_precipitation, fake_temperature, fake_year)
+                                         fake_sea_ice, fake_precip_monthly, fake_split_precipitation, fake_temperature, fake_year)
 
 
 def prepare(raw, out, *extra):
@@ -396,3 +396,44 @@ def test_fires_from_the_data_step_to_the_webapp_call(tmp_path):
     w = res["wildfires"]                                       # the webapp's earlier name for the same data
     assert w["status"] == 200 and w["dataset_ids"] == ["wildfires"] and abs(w["values"]["wildfires"] - 12) < 0.01
 
+
+
+SEA_ICE_CHECK = """
+import json
+from fastapi.testclient import TestClient
+from backend.app import app
+c = TestClient(app)
+def zone(ids, lat, period="1987-11"):
+    pts = [{"lat": lat, "lng": 20.0, "x": 1, "y": 2}, {"lat": lat + 1, "lng": 21.0, "x": 3, "y": 4}]
+    r = c.post("/api/zones/zone-data", json={"zone_id": "z", "zone_name": "Z", "dataset_ids": ids, "points": pts,
+                                             "time_period": period, "aggregation": "mean"})
+    j = r.json(); j.pop("audio_data", None)
+    return {"status": r.status_code, **j}
+print(json.dumps({"instruments": c.get("/api/instruments").json(), "arctic": zone(["sea_ice"], 84.0),
+                  "ice": zone(["ice"], 84.0), "open_sea": zone(["sea_ice"], 40.0), "gap": zone(["sea_ice"], 84.0, "1988-01")}))
+"""
+
+
+def test_sea_ice_from_the_data_step_to_the_webapp_call(tmp_path):
+    raw, cache = tmp_path / "data", tmp_path / "cache"
+    (raw / "sea_ice_1979_2026").mkdir(parents=True)
+    fake_sea_ice(raw / "sea_ice_1979_2026", ["1987-10", "1987-11", "1988-02", "1988-03"])
+    assert "1 dataset(s) built" in prepare(raw, cache / "_datasets")
+    assert (cache / "_datasets" / "real_sea_ice_1987_1988_sea_ice.npz").exists()
+    env = {**os.environ, "JUKEBOX_DATA_DIR": str(raw), "JUKEBOX_CACHE_DIR": str(cache), "JUKEBOX_MERGE_DATASETS": "1",
+           "JUKEBOX_FULL_API": "0", "JUKEBOX_CHUNK_SECONDS": "6"}
+    env.pop("JUKEBOX_BUILT_DIR", None)
+    r = subprocess.run([sys.executable, "-c", SEA_ICE_CHECK], cwd=str(ROOT), env=env, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr[-2000:]
+    res = json.loads(r.stdout.strip().splitlines()[-1])
+    row = res["instruments"]["instruments"][0]
+    assert row["dataset_id"] == "sea_ice" and "Bowed glass" in row["instrument"] and row["units"] == "% of the sea covered by ice"
+    assert row["first_time_period"] == "1987-10" and row["last_time_period"] == "1988-03"
+    a = res["arctic"]
+    assert a["status"] == 200 and a["dataset_ids"] == ["sea_ice"] and abs(a["values"]["sea_ice"] - 80) < 0.01
+    assert res["ice"]["status"] == 200 and abs(res["ice"]["values"]["ice"] - 80) < 0.01      # alias
+    o = res["open_sea"]
+    assert o["status"] == 200 and o["values"]["sea_ice"] == 0
+    g = res["gap"]          # 1988-01 is in the satellite gap: no value for it, the chunk plays on with 1988-02
+    assert g["status"] == 200 and g["values"].get("sea_ice") is None, g
+    assert g["next_time_period"] == "1988-03"

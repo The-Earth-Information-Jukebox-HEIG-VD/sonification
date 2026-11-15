@@ -271,6 +271,12 @@ All fields are optional. The smallest request is `{}` (global zone, default data
 
 ```
 
+### New in v2.11 (sea ice)
+- new variable from the team's data: **sea ice** (`sea_ice`, bowed glass): the share of the sea covered by ice, in %, monthly, January 1979 to October 2026 (NSIDC Sea Ice Index). Land has no value, so the mean of an area is the share of its sea that is frozen; the bowed glass is high and sustained, louder with more ice, enters above about 5 % and is silent over land and warm seas (the choice planned in `music/README.md`). `ice` and `seaice` are accepted as other names.
+- the source has no December 1987 and January 1988 (a gap between two satellites): those months have no value (`null` in `/api/zones/series`) and the instrument rests; a piece that starts there plays on with February 1988.
+- `realistic`: synthesised "singing" ice, falling pings of cracks and low creaks of floes, more of them with more ice. In the genres the bowed glass stays the same, like the night lights' synth pad.
+- less ice than the season's normal adds to the musical tension (minor chords).
+
 ### New in v2.10 (chunk timing, genre in vinyl mode)
 - `POST /api/zones/zone-data` answers with `duration_s` (the exact length of the audio) and `bar_starts_s` (the start second of each bar, from `score.bars[i].start_s`; the first is 0, there is no intro in the data style; one bar = one month for monthly data, `frames_per_bar` frames otherwise). Its length is the number of months to `next_time_period`. The temperature-driven tempo makes bars of different lengths, so the frontend should time the chunk with it instead of assuming 3 s per month.
 - `POST /api/zones/groove` takes an optional `genre` (aliases accepted, `400` if unknown, `realistic` included) and echoes it when sent. The tempo stays the fixed 3 s bar (explicit `bpm`; no temperature tempo with `series_in`). The genre is part of the cache key; `GROOVE_VERSION` is 3.

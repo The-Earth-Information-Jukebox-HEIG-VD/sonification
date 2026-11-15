@@ -72,17 +72,18 @@ Variables that are **present all the time** (temperature, CO₂) form the harmon
 | **Melody** G4–E6 (sounds 8va) | snowfall (sometimes) | **Glockenspiel** | pitch = value while it snows (real snow flag from the extraction) | gated line |
 | **Percussion** E2–G3 | lightning (sometimes) | **Timpani** (thunder) | hits per beat = flash density, pitch = value | beat patterns, roll before the climax |
 | **Swell** E2–C4 | fires (sometimes) | **Trombones** | held, louder with more fires | held swell |
+| **Melody** D5–A6 | sea ice (polar seas) | **Bowed glass**, high and sustained | pitch = share of the sea frozen, **loudness = amount of ice**; silent where there is no sea ice | gated legato line |
 | **Pad** D4–A5 | night lights (yearly) | **Synth pad**, the only electronic sound (human activity) | starts clearly when the yearly value changes, then fades slowly over the whole year | held swell |
 
-### Planned: the two datasets still missing
-Not in the `ORCHESTRA` table yet: the data has not arrived. These are the intended choices, to add when it does.
+### Planned: the dataset still missing
+Sea ice arrived (NSIDC Sea Ice Index, 1979 -> 2026) and plays as planned below. The CO₂ exchange with plants is not in the `ORCHESTRA` table yet: its data has not arrived.
 
 | variable | instrument | data style | why |
 |---|---|---|---|
 | **Arctic sea ice** (smooth, large seasonal cycle, long decline, polar only) | **Bowed glass** (GM 92, already in the `ice` palette), high and sustained | **loudness = amount of ice**, pitch = value; silent where the area has no sea ice | melting is heard as the sound thinning out and disappearing: the loss is audible as absence |
 | **CO₂ exchange with plants** (signed: uptake in the growing season, release the rest of the year) | **A woodwind**, clarinet (GM 71) or bassoon (GM 70), low-middle register | a fixed note marks **zero**: uptake on one side of it, release on the other, so the sign is audible | the planet breathing; it pairs with the contrabass (the CO₂ in the air, and the plants that breathe it) |
 
-To check by ear when the ice data arrives: bowed glass and the night-lights synth pad are both pad-like sounds. They should stay apart (the ice sits higher and follows its amount continuously; the night lights fade once a year), but an A/B listening test should confirm it before release.
+To check by ear now that the ice data is in: bowed glass and the night-lights synth pad are both pad-like sounds. They should stay apart (the ice sits higher and follows its amount continuously; the night lights fade once a year), but an A/B listening test should confirm it before release.
 
 ## 2. Time: everything lives in bars
 - **1 frame = 1 bar** of 4 beats (24 months → 24 bars), plus a 2-bar final cadence on the tonic.
