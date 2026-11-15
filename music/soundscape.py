@@ -63,6 +63,9 @@ CLIPS = {
     **{f"tick_{5 + k}": ("oga_ticking_clock.wav", t - 0.03, t + 0.3, None, "tick")
        for k, t in enumerate([0.153, 1.157, 2.154, 3.154, 5.168, 6.156, 7.156])},
 }
+# stretches cut out of a recording before it is looped (start s, end s): a car horn in the city recording
+CUTS = {"city": [(14.9, 16.7)]}
+AMBIENCE_VERSION = "2"     # bump when the preparation changes: installed clips of another version are prepared again
 THUNDERS = [k for k in CLIPS if k.startswith("thunder")]
 TICKS = [k for k in CLIPS if k.startswith("tick_")]
 
@@ -122,7 +125,9 @@ def _seamless(x: np.ndarray, cf_s=1.0) -> np.ndarray:
 
 
 def ambience_available(folder: Path = AMBIENCE_DIR) -> bool:
-    return all((folder / f"{k}.flac").exists() for k in CLIPS)
+    version = folder / "VERSION"
+    return (version.exists() and version.read_text().strip() == AMBIENCE_VERSION
+            and all((folder / f"{k}.flac").exists() for k in CLIPS))
 
 
 def ensure_ambience(folder: Path = AMBIENCE_DIR, verbose=True) -> bool:
@@ -150,6 +155,11 @@ def ensure_ambience(folder: Path = AMBIENCE_DIR, verbose=True) -> bool:
             else:
                 decoded[src] = _decode(raw_dir / src)
         x = decoded[src][int(t0 * SR): None if t1 is None else int(t1 * SR)]
+        for c0, c1 in sorted(CUTS.get(clip, []), reverse=True):     # remove a stretch, cross-fade the two sides
+            cf = int(0.3 * SR)
+            a, b = x[:int(c0 * SR)], x[int(c1 * SR):]
+            w = np.linspace(0, 1, cf, dtype=np.float32)[:, None]
+            x = np.concatenate([a[:-cf], a[-cf:] * (1 - w) + b[:cf] * w, b[cf:]])
         if lowpass:
             x = _fft_filter(x, hi=lowpass)
         if kind == "loop":
@@ -172,6 +182,7 @@ def ensure_ambience(folder: Path = AMBIENCE_DIR, verbose=True) -> bool:
     lines += [f"| {name} | {credit} | {lic} |" for name, (_, credit, lic) in SOURCES.items()]
     lines += ["", "CC BY sounds: credit the authors above wherever the audio is published."]
     (folder / "CREDITS.md").write_text("\n".join(lines) + "\n")
+    (folder / "VERSION").write_text(AMBIENCE_VERSION + "\n")
     for f in raw_dir.iterdir():                    # keep only the prepared clips
         f.unlink()
     raw_dir.rmdir()
@@ -244,19 +255,19 @@ def heartbeat(beat_times, values, n):
     """A 'lub-dub' at the start of every beat. values: 0..1 per beat (NaN = no data = silent): louder and a
     little harder when hotter. The 'dub' follows the 'lub' a little sooner when the heart beats faster."""
     if not HEART:
-        HEART.update(lub=_thump(95, 48, 0.22), dub=_thump(120, 60, 0.15, drive=2.0))
+        HEART.update(lub=_thump(95, 48, 0.22, drive=5.0), dub=_thump(120, 60, 0.15, drive=4.0))   # strong harmonics: heard on small speakers
     out = np.zeros(n, np.float32)
     for b in range(len(beat_times) - 1):
         v = values[b] if b < len(values) else np.nan
         if not np.isfinite(v):
             continue
         period = beat_times[b + 1] - beat_times[b]
-        a = 0.3 + 0.7 * float(v)
+        a = 0.45 + 0.55 * float(v)              # always clearly there: the pulse leads the mix
         for grain, at, g in ((HEART["lub"], 0.0, 1.0), (HEART["dub"], min(0.3, 0.36 * period), 0.65)):
             i = int((beat_times[b] + at) * SR)
             seg = grain[: max(0, n - i)]
             out[i:i + len(seg)] += seg * a * g
-    out *= 10 ** (-9 / 20)
+    out *= 10 ** (3 / 20)
     return np.stack([out, out], 1)
 
 
@@ -294,6 +305,7 @@ def render(layers, beat_times, total_s, seed=7, tail_s=1.0, temperature_sound="h
     rng = np.random.default_rng(seed)
     n = int((total_s + tail_s) * SR)
     mix = np.zeros((n, 2), np.float32)
+    heart = np.zeros((n, 2), np.float32)          # the temperature pulse, mixed on top (see the ducking below)
     for L in layers:
         var, gate = L["var"], L.get("gate", 0.0)
         pres = np.where(np.nan_to_num(L["pres"]) >= max(gate, 1e-6), np.nan_to_num(L["pres"]), 0.0)
@@ -302,8 +314,8 @@ def render(layers, beat_times, total_s, seed=7, tail_s=1.0, temperature_sound="h
         on = envelope(np.isfinite(np.asarray(L["norm"], dtype=float)).astype(float), beat_times, n)   # data exists
         if var == "precipitation":
             heavy = np.clip((p - 0.45) / 0.4, 0, 1) ** 1.2
-            mix += loop(clip("rain_light"), n, rng) * (p ** 0.8)[:, None] * 1.1
-            mix += loop(clip("rain_heavy"), n, rng) * heavy[:, None] * 1.0
+            mix += loop(clip("rain_light"), n, rng) * (p ** 0.8)[:, None] * 0.32
+            mix += loop(clip("rain_heavy"), n, rng) * heavy[:, None] * 0.2
         elif var == "snowfall":
             mix += loop(clip("wind", lo=500), n, rng) * (p ** 0.8)[:, None] * 5.0      # the high part of the wind: airy
         elif var in ("fires", "aerosol_smoke"):
@@ -328,13 +340,22 @@ def render(layers, beat_times, total_s, seed=7, tail_s=1.0, temperature_sound="h
         elif var == "surface_temperature":
             # the heartbeat beats on every beat: its speed is the tempo, which follows the temperature
             vals = np.asarray(L["norm"], dtype=float)
-            mix += clock(beat_times, vals, n, rng) if temperature_sound == "clock" else heartbeat(beat_times, vals, n)
+            heart += clock(beat_times, vals, n, rng) if temperature_sound == "clock" else heartbeat(beat_times, vals, n)
         elif var == "co2":
             mix += loop(clip("city"), n, rng) * ((0.15 + 0.85 * v) * on)[:, None] * 0.55
         elif var == "nightlights":
             mix += hum(n, rng) * p[:, None] * 0.35
         elif var == "aerosol_dust":
             mix += loop(clip("wind", lo=250, hi=4000), n, rng) * (p ** 0.8)[:, None] * 0.9
+    if np.any(heart):
+        # ducking ("pumping"): on every beat the other sounds dip for a moment, so the pulse always comes through
+        # and the whole soundscape breathes with it: the urgency is felt, not only heard
+        env = np.abs(heart).max(axis=1)
+        k = int(0.12 * SR)
+        env = np.convolve(env, np.ones(k) / k, "same")
+        env = env / (env.max() + 1e-9)
+        mix *= (1 - 0.55 * env)[:, None]
+        mix += heart
     fade = int(0.05 * SR)                          # no click where two chunks meet
     mix[:fade] *= np.linspace(0, 1, fade)[:, None]
     mix[-int(tail_s * SR):] *= np.linspace(1, 0, int(tail_s * SR))[:, None]
