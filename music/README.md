@@ -79,12 +79,11 @@ Variables that are **present all the time** (temperature, CO₂) form the harmon
 | **Pad** D4–A5 | night lights (yearly) | **Synth pad**, the only electronic sound (human activity) | starts clearly when the yearly value changes, then fades slowly over the whole year | held swell |
 
 ### Planned: the dataset still missing
-Sea ice arrived (NSIDC Sea Ice Index, 1979 -> 2026) and plays as planned below. The CO₂ exchange with plants is not in the `ORCHESTRA` table yet: its data has not arrived.
+Sea ice (bowed glass), vegetation (clarinet), carbon monoxide (bassoon) and ocean chlorophyll (vibraphone) are in the `ORCHESTRA` table above. The CO₂ exchange with plants is not: its data has not arrived, and the clarinet and bassoon first planned for it now play vegetation and carbon monoxide, so it would need another instrument.
 
 | variable | instrument | data style | why |
 |---|---|---|---|
-| **Arctic sea ice** (smooth, large seasonal cycle, long decline, polar only) | **Bowed glass** (GM 92, already in the `ice` palette), high and sustained | **loudness = amount of ice**, pitch = value; silent where the area has no sea ice | melting is heard as the sound thinning out and disappearing: the loss is audible as absence |
-| **CO₂ exchange with plants** (signed: uptake in the growing season, release the rest of the year) | **A woodwind**, clarinet (GM 71) or bassoon (GM 70), low-middle register | a fixed note marks **zero**: uptake on one side of it, release on the other, so the sign is audible | the planet breathing; it pairs with the contrabass (the CO₂ in the air, and the plants that breathe it) |
+| **CO₂ exchange with plants** (signed: uptake in the growing season, release the rest of the year) | to choose: a low-middle woodwind other than the clarinet and bassoon | a fixed note marks **zero**: uptake on one side of it, release on the other, so the sign is audible | the planet breathing; it pairs with the contrabass (the CO₂ in the air, and the plants that breathe it) |
 
 To check by ear now that the ice data is in: bowed glass and the night-lights synth pad are both pad-like sounds. They should stay apart (the ice sits higher and follows its amount continuously; the night lights fade once a year), but an A/B listening test should confirm it before release.
 
@@ -137,8 +136,6 @@ O=simulation/output; python music/orchestra.py $O/real_temperature_1880_2025_ $O
     $O/real_snow_2000_2026_ $O/real_fires_2002_2026_ --zone switzerland --start 2017-01 --end 2018-12 --genre rocknroll --render --mp3
 ```
 
-**The temperature sets the tempo** (`--tempo-source temperature`, every genre, data style; `--fixed-tempo` / `"tempo_from_temperature": false` for one fixed tempo): each bar's tempo = the genre's tempo x (0.75 + 0.5 t), t = the bar's mean temperature on the 5th..95th percentile of the whole series of the area (robust: a few extreme months do not squeeze the others into the middle), so the same temperature is the same tempo in every piece. In `realistic`, the heartbeat goes from 60 to 130 bpm. The MIDI has a tempo change on each bar; `score.tempo_map` and `score.tempo_range` give them. With `duration_s`, the number of bars is chosen with these tempos and the whole map is nudged to last exactly `duration_s`: 30 s covers 11 bars of 2023 against 9 of 1900 in Switzerland (orchestra), 16 against 10 worldwide (realistic: the heart beats at about 127 bpm in 2023, 64–90 in 1900).
-
 **The CO₂ sets the tempo** (default, `--tempo-source co2`, `"tempo_source": "co2"`; `music/urgency.py`): the goal is to
 hear the harm of climate change, so each bar is played at the tempo of the **global CO₂** of its dates. CO₂ almost
 never goes down, so the music only speeds up with the years (the temperature comes back down in cool years). The
@@ -152,6 +149,8 @@ bpm × (0.8 + 0.45u). In `realistic` the soundscape builds up too:
 - the whole soundscape gets louder with the CO₂.
 `score.tempo_source` and `score.co2` (`co2_ppm_per_bar`, `urgency_per_bar`). `--tempo-source temperature` gives
 the tempo of the temperature, below.
+
+**Optional: the temperature sets the tempo** (the v2.9 behaviour, only on request: `--tempo-source temperature`, or `"tempo_source": "temperature"` in `POST /api/compose`; the frontend's calls always use the CO₂; `--fixed-tempo` / `"tempo_from_temperature": false` for one fixed tempo): each bar's tempo = the genre's tempo x (0.75 + 0.5 t), t = the bar's mean temperature on the 5th..95th percentile of the whole series of the area (robust: a few extreme months do not squeeze the others into the middle), so the same temperature is the same tempo in every piece. In `realistic`, the heartbeat goes from 60 to 130 bpm. The MIDI has a tempo change on each bar; `score.tempo_map` and `score.tempo_range` give them. With `duration_s`, the number of bars is chosen with these tempos and the whole map is nudged to last exactly `duration_s`: 30 s covers 11 bars of 2023 against 9 of 1900 in Switzerland (orchestra), 16 against 10 worldwide (realistic: the heart beats at about 127 bpm in 2023, 64–90 in 1900).
 
 ## 6. Music through the ages (fun mode, `--eras`)
 `compose(..., eras=True)` (API: `"eras": true`) plays each bar in the style of its **date**, so a long timeline goes from a Romantic orchestra in 1880 to trap in 2026:
