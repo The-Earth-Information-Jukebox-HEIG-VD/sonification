@@ -116,7 +116,7 @@ def test_groove_endpoint():
     audio = base64.b64decode(j["audio_data"])
     assert len(audio) > 5000 and (audio[:3] == b"ID3" or audio[0] == 0xFF or audio[:4] == b"RIFF")
     # the same places (after snapping) come from the cache: the same piece
-    nudged = {**body, "path": [{"lat": p["lat"] + 0.1, "lng": p["lng"] - 0.1} for p in path]}
+    nudged = {**body, "path": [{"lat": p["lat"] + 0.04, "lng": p["lng"] - 0.04} for p in path]}
     assert client.post("/api/zones/groove", json=nudged).json()["audio_data"] == j["audio_data"]
     assert j["points_per_bar"] == 1 and j["stop_seconds"] == 3.0
     # a whole year instead of a month
@@ -145,3 +145,27 @@ def test_groove_errors():
     assert post(radius_deg=50).status_code == 422
     assert post(dataset_ids=["unicorns"]).status_code == 400
     assert post(time_period="1700").status_code == 400                                     # no data at that date
+
+
+def test_groove_genre():
+    """`genre` (aliases ok) changes the music, is echoed only when sent, keeps the fixed 3 s bars; unknown -> 400."""
+    temp = _instrument("temperature")
+    assert temp, "no temperature dataset on this server"
+    year = int(temp["last_time_period"][:4]) - 1
+    month = f"{year}-07" if len(temp["last_time_period"]) > 4 else str(year)
+    path = [{"lat": 46.2, "lng": 6.1 + 2.5 * k} for k in range(4)]
+    body = {"dataset_ids": ["temperature"], "time_period": month, "path": path}
+    plain = client.post("/api/zones/groove", json=body).json()
+    assert "genre" not in plain
+    funk = client.post("/api/zones/groove", json={**body, "genre": "funk"})
+    assert funk.status_code == 200, funk.text
+    f = funk.json()
+    assert f["genre"] == "funk" and f["audio_data"] != plain["audio_data"]
+    assert f["bar_seconds"] == 3.0 and abs(f["duration_s"] - 12.0) < 0.2         # the tempo stays fixed
+    alias = client.post("/api/zones/groove", json={**body, "genre": "jazz"}).json()
+    assert alias["genre"] == "swing" and alias["audio_data"] != f["audio_data"]  # another genre, another cache key
+    assert client.post("/api/zones/groove", json={**body, "genre": "funk"}).json()["audio_data"] == f["audio_data"]
+    real = client.post("/api/zones/groove", json={**body, "genre": "realistic"})
+    assert real.status_code == 200, real.text
+    assert real.json()["genre"] == "realistic" and abs(real.json()["duration_s"] - 12.0) < 0.2
+    assert client.post("/api/zones/groove", json={**body, "genre": "polka"}).status_code == 400

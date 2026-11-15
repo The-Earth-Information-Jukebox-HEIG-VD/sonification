@@ -328,7 +328,7 @@ def test_the_webapp_endpoint_and_ids(tmp_path):
     # one yearly dataset: exactly the fields of ZoneDataResponse; the value is the year's (points: one lit, one lit)
     a, b = res["lights_2012"], res["lights_2013"]
     assert a["status"] == 200 and set(a) - {"status"} == {"zone_id", "dataset_ids", "time_period", "next_time_period",
-                                                           "audio_data", "values", "point_count"}
+                                                           "audio_data", "values", "point_count", "duration_s", "bar_starts_s"}
     assert a["dataset_ids"] == ["night_lights"] and a["point_count"] == 2 and a["audio_data"] > 10000
     assert abs(a["values"]["night_lights"] - 0.02) < 1e-3 and abs(b["values"]["night_lights"] - 0.03) < 1e-3
     assert a["time_period"] == "2012-11" and a["next_time_period"] == "2013-01"            # 6 s = 2 monthly bars

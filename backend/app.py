@@ -53,7 +53,7 @@ CACHE_DIR = Path(os.environ.get("JUKEBOX_CACHE_DIR", ROOT / "backend" / "cache")
 # datasets converted from the team's raw folders by backend/prepare_data.py (the data folder can be read-only)
 BUILT_DIR = Path(os.environ.get("JUKEBOX_BUILT_DIR") or CACHE_DIR / "_datasets")
 CORS = [o.strip() for o in os.environ.get("JUKEBOX_CORS", "*").split(",")]
-API_VERSION = "2.9"
+API_VERSION = "2.10"
 COMPOSITION_ID = re.compile(r"[0-9a-f]{16}")         # what cache_key() produces
 # 1 = a request that names no dataset takes EACH variable from its own best dataset and the composer lines
 # them up by date (temperature since 1880 with precipitation joining in 2000 ...). The Docker image sets it:
@@ -696,6 +696,9 @@ def make_chunk(req: SonifyRequest, request: Request, duration_s: float = CHUNK_S
             "point_count": len(req.points) if req.points else len(cells or []), "cell_count": score.get("cells"),
             "aggregation": req.aggregation, "time_end": end_time[:n] if end_time else None,
             "duration_s": score["duration_s"], "composition_id": out["id"], "cached": out["cached"],
+            # start second of each bar played (data style: no intro, bar 0 at 0); one bar = one month, or
+            # `frames_per_bar` frames (days) when the data is daily
+            "bar_starts_s": [b["start_s"] for b in score["bars"]],
             # which dataset of GET /api/datasets was played (the main variable's, when several were merged)
             "source_dataset": used.get(main) or out["request"]["dataset"],
             # {variable: dataset} when several were merged; only the variables that are in the piece
@@ -747,6 +750,7 @@ def zone_data(req: ZoneDataRequest, request: Request):
     return {"zone_id": chunk["zone_id"], "dataset_ids": [sent_id.get(v, SHORT_IDS.get(v, v)) for v in chunk["values"]],
             "time_period": chunk["time_period"], "next_time_period": chunk["next_time_period"],
             "audio_data": chunk["audio_data"], "values": values, "point_count": chunk["point_count"],
+            "duration_s": chunk["duration_s"], "bar_starts_s": chunk["bar_starts_s"],
             **({"era": chunk["era"], "eras": chunk["eras"]} if req.eras else {}),
             **({"genre": chunk["genre"]} if req.genre else {})}
 
@@ -759,7 +763,7 @@ GROOVE_BAR_SECONDS = 3.0       # the same bar as the normal mode (30 s = 10 bars
 GROOVE_SNAP_DEG = 0.5          # places are snapped to this grid, so listeners crossing the same places share the cache
 GROOVE_MAX_BARS = 20           # bars of one request (20 x 3 s = 60 s of music)
 GROOVE_MAX_STOPS = GROOVE_MAX_BARS * 4      # points of one request at 4 points per bar
-GROOVE_VERSION = 2             # bump when the groove music changes, so cached pieces are not reused
+GROOVE_VERSION = 3             # bump when the groove music changes, so cached pieces are not reused
 
 
 def _snap(v: float) -> float:
@@ -776,6 +780,10 @@ class GrooveRequest(BaseModel):
                                     f"{GROOVE_MAX_BARS} bars of {GROOVE_BAR_SECONDS:g} s")
     points_per_bar: Literal[1, 2, 4] = Field(1, description="points of `path` per bar: 4 = one point per beat "
                                              f"({GROOVE_BAR_SECONDS / 4:g} s each), 40 points for 30 s")
+    genre: Optional[str] = Field(None, description="optional musical genre for the whole piece: orchestra (default), "
+                                 "ragtime, swing, rocknroll, funk, synthpop, house, trap, or realistic (sounds of rain, "
+                                 "fire, thunder ...). See GET /api/instruments -> genres. The tempo stays fixed "
+                                 "(3 s bars). The answer then has `genre`")
     radius_deg: float = Field(1.5, ge=0.1, le=10, description="how wide the needle reads: each place is the mean "
                               "over a disc of this radius (degrees)")
 
@@ -805,6 +813,7 @@ def zone_groove(req: GrooveRequest, request: Request):
     read on the needle (a disc of `radius_deg` around the place) and played on each dataset's GLOBAL scale, so
     a value is the same note wherever the needle is. Pieces have a fixed bar length (`bar_seconds`) and key,
     so consecutive stretches of the same groove join without a jump."""
+    gkey = resolve_genre(req.genre)
     sent = list(req.dataset_ids or [])
     variable_of, kept = known_dataset_ids(sent)
     variables = [variable_of[d] for d in kept] or None
@@ -817,7 +826,7 @@ def zone_groove(req: GrooveRequest, request: Request):
     radius = round(req.radius_deg, 2)
     stamp = sorted((v, f.name, f.stat().st_mtime) for v, f in files.items())
     key = hashlib.sha1(json.dumps({"groove": GROOVE_VERSION, "period": req.time_period, "stops": stops,
-                                   "radius": radius, "ppb": req.points_per_bar, "_data": stamp,
+                                   "radius": radius, "ppb": req.points_per_bar, "genre": gkey, "_data": stamp,
                                    "_v": API_VERSION}).encode()).hexdigest()[:16]
     folder = CACHE_DIR / key
     with lock_for(key):
@@ -833,7 +842,7 @@ def zone_groove(req: GrooveRequest, request: Request):
             bbox = (la0, la1 if la1 > la0 else la0 + 1e-3, max(-180.0, min(lngs) - radius), min(180.0, max(lngs) + radius))
             try:
                 orchestra.compose([], bbox=bbox, series_in=series, pitch_range="series",
-                                  frames_per_bar=req.points_per_bar,
+                                  frames_per_bar=req.points_per_bar, genre=gkey,
                                   bpm=60.0 * 4 / GROOVE_BAR_SECONDS, out_dir=folder, name="score",
                                   render=True, audio_format="mp3", audio_engine="auto")
             except orchestra.ComposeError as e:
@@ -855,6 +864,7 @@ def zone_groove(req: GrooveRequest, request: Request):
             "duration_s": score["duration_s"], "bar_seconds": GROOVE_BAR_SECONDS,
             "points_per_bar": req.points_per_bar, "stop_seconds": GROOVE_BAR_SECONDS / req.points_per_bar,
             "radius_deg": radius,
+            **({"genre": gkey} if req.genre else {}),
             "stops": [{"lat": la, "lng": lo, "values": {id_of(v): values[v][i] for v in playing}}
                       for i, (la, lo) in enumerate(stops)]}
 

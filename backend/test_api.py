@@ -279,6 +279,25 @@ def test_zone_series():
     assert client.post("/api/zones/series", json={**body, "points": [{"lat": 0, "lng": 0}] * 20001}).status_code == 422
 
 
+def test_zone_data_timing():
+    """zone-data says how long the chunk is and where each month starts: the temperature sets the tempo, so
+    a 30 s chunk is not 10 x 3 s."""
+    pts = [{"lat": 48.8566, "lng": 2.3522}, {"lat": 46.5, "lng": 6.6}]
+    body = {"zone_id": "france", "dataset_ids": ["temperature"], "points": pts, "time_period": "2015-01"}
+    inst = {r["dataset_id"]: r for r in client.get("/api/instruments").json()["instruments"]}
+    if inst["temperature"]["first_time_period"][:7] > "2015-01":
+        body["time_period"] = inst["temperature"]["first_time_period"][:7]
+    j = client.post("/api/zones/zone-data", json=body).json()
+    assert abs(j["duration_s"] - 30) < 0.5
+    starts = j["bar_starts_s"]
+    assert starts[0] == 0 and all(b > a for a, b in zip(starts, starts[1:])) and starts[-1] < j["duration_s"]
+    if j["next_time_period"]:
+        assert len(starts) == _months(j["time_period"], j["next_time_period"])
+    # also with a genre (another tempo, still 30 s)
+    g = client.post("/api/zones/zone-data", json={**body, "genre": "rocknroll"}).json()
+    assert abs(g["duration_s"] - 30) < 0.5 and g["bar_starts_s"][0] == 0 and len(g["bar_starts_s"]) > len(starts) - 3
+
+
 def _mask_of(points) -> str:
     """What the webapp sends as `mask`: the 0.1 degree cell of each point, packed, zlib, base64."""
     import base64, zlib
