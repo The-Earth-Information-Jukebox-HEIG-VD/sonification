@@ -1,6 +1,6 @@
 # The API the frontend uses
 
-Three calls. No options. (API v2.4)
+Three calls. No options. (API v2.5)
 
 - Base URL: the backend, e.g. `http://localhost:8000` (behind the webapp's nginx: the same origin, `/api/...`).
 - Everything is JSON. Errors have a `detail` message.
@@ -72,12 +72,13 @@ Response: `zone_id`, `dataset_id`, `time_period`, `next_time_period`, `audio_dat
 |---|---|
 | `zone_id`, `zone_name` | your own labels; `zone_id` is sent back as is |
 | `points` | the selected points. `lat` and `lng` are used; `x`, `y` are accepted and ignored |
+| `mask` | the same area as a compressed bitmap, **instead of** `points` (v2.5; recommended for big zones, see below) |
 | `time_period` | where the music starts, `"YYYY-MM"` |
 | `aggregation` | `"mean"` (the only one; `sum`, `max`, `min` are refused with a `422`) |
 | `audio_data` | 30 seconds of music as a base64 MP3. `decodeAudioData` in `zoneApi.ts` plays it as is |
 | `next_time_period` | send it as the next `time_period` to continue. `null` when the data ends |
 | `value` / `values` | the mean of each dataset over the points at `time_period`, in the units of `/api/instruments` |
-| `point_count` | the number of points received |
+| `point_count` | the number of points received (with `mask`: the number of 0.1° cells it selects) |
 
 ### What to expect
 - **30 seconds is 10 months**: one bar of music per month. The next period after `2015-01` is `2015-11`, not `2015-02`: use `next_time_period`, do not add one month yourself.
@@ -86,7 +87,16 @@ Response: `zone_id`, `dataset_id`, `time_period`, `next_time_period`, `audio_dat
 - **Yearly data** (`night_lights`): the value is the year's. The synth pad starts clearly each January, when the value changes, then fades slowly over the year to a softer background note.
 - **The same value is the same note** in every piece of the same area, so consecutive pieces connect.
 - **Errors**: `400` unknown dataset or no data for these points and this period; `422` malformed request (no points, latitude out of range, another `aggregation`).
-- A first request takes 2 to 5 seconds; the same request again is immediate.
+- A new area takes about a second on the server (its whole series is read once); the following pieces of the same area are faster (the series is kept in memory), and the same request again is immediate.
+
+### `mask`: big zones in a few kB (v2.5)
+As points, an ocean is ~57 000 entries, about 3 MB of JSON sent again with every piece (the whole globe: 14 MB). `mask` describes the same cells in 2 to 4 kB:
+
+1. a grid of 1800 × 3600 booleans (0.1°), row 0 = 90°N, column 0 = 180°W, the same grid the points are placed on: point → `row = Math.min(Math.floor((90 - lat) * 1800 / 180), 1799)`, `col = Math.min(Math.floor(((lng + 180) % 360) * 3600 / 360), 3599)` (exactly these operations, in this order, so the floating-point rounding is the server's);
+2. packed 8 cells per byte, row-major, first cell = highest bit (numpy `packbits`): 810 000 bytes;
+3. compressed with zlib (the browser's `new CompressionStream("deflate")`), then base64.
+
+The server finds exactly the cells the points would give, so the music and the values are identical. Send `mask` or `points` (if both are sent, `mask` is used). A mask that does not inflate to exactly 810 000 bytes, or selects no cell, is a `422`.
 
 `GET /api/health` answers `{"status": "ok", ...}` when the server is up; `"preparing_data": true` means it is still loading its datasets after a start (a few minutes, once).
 
@@ -102,7 +112,7 @@ No audio: one value per month for each requested dataset, the same area-weighted
   "aggregation": "mean"
 }
 ```
-`dataset_ids`: at least one id of `GET /api/instruments`. `points`: 1 to 20 000 `{lat, lng}` (`x`, `y` accepted, not used). `zone_id`, `zone_name` optional. `aggregation`: only `"mean"`.
+`dataset_ids`: at least one id of `GET /api/instruments`. `points`: 1 to 20 000 `{lat, lng}` (`x`, `y` accepted, not used), or instead `mask` (v2.5, no size limit, the same format as for zone-data). `zone_id`, `zone_name` optional. `aggregation`: only `"mean"`.
 
 ```json
 {
@@ -124,7 +134,7 @@ No audio: one value per month for each requested dataset, the same area-weighted
 - `yearly: true` (`night_lights`): one map per year, so the 12 months of a year have the same value. Draw it as steps.
 - Daily data is averaged per month.
 - `missing`: the requested ids the server has no data for. They are left out of `series`, not an error, as long as one id is known.
-- **Errors**: `400` when none of the ids is known (same message as zone-data); `422` malformed request (no points, more than 20 000, no `dataset_ids`, another `aggregation`).
+- **Errors**: `400` when none of the ids is known (same message as zone-data); `422` malformed request (no points and no mask, more than 20 000 points, an invalid `mask`, no `dataset_ids`, another `aggregation`).
 - The first request for an area takes up to about a second (the 1880 → today temperature); the same area again is immediate (cached).
 
 Nothing else is served by the deployed backend. The engine's own endpoints and options (`backend/API.md`) exist for development only (`JUKEBOX_FULL_API=1`).

@@ -37,8 +37,12 @@ from __future__ import annotations
 
 import argparse
 import glob
+import hashlib
 import json
+import os
 import sys
+import threading
+from collections import OrderedDict
 from pathlib import Path
 
 import numpy as np
@@ -897,10 +901,42 @@ def _time_window(times, start, end, count=None):
     return slice(lo, hi + 1)
 
 
+AREA_CACHE_SIZE = 512          # areas x variables kept: one entry is one float per frame (~14 kB for 1880 -> 2025)
+_area_cache: "OrderedDict[tuple, np.ndarray]" = OrderedDict()
+_area_lock = threading.Lock()
+
+
+def _area_key(z, mask):
+    """(file, its version, the mask) or None when `z` does not come from a file (then nothing is cached)."""
+    path = getattr(getattr(z, "zip", None), "filename", None)
+    if not path:
+        return None
+    st = os.stat(path)
+    return (os.path.realpath(path), st.st_mtime_ns, st.st_size, mask.shape,
+            hashlib.sha1(np.packbits(mask)).hexdigest())
+
+
 def area_mean(z, mask):
     """Mean of the map over `mask`, per frame: cos-latitude weighted, NaN ignored (zone_to_midi.zone_series).
-    The ONE way an area is averaged: the music (compose) and the chart (POST /api/zones/series) both use it."""
-    m, _ = zone_series(z["data"].astype(np.float32), z["lat"], mask)
+    The ONE way an area is averaged: the music (compose) and the chart (POST /api/zones/series) both use it.
+
+    Cached in memory per (file, mask): every 30 s chunk of the same zone needs the same full series (the anomaly
+    is computed against the whole series), and reading it means decompressing the map's whole history. The
+    returned array is read-only; a rebuilt file (new mtime/size) is a new key."""
+    key = _area_key(z, mask)
+    if key is not None:
+        with _area_lock:
+            hit = _area_cache.get(key)
+            if hit is not None:
+                _area_cache.move_to_end(key)
+                return hit
+    m, _ = zone_series(z["data"], z["lat"], mask)
+    m.flags.writeable = False
+    if key is not None:
+        with _area_lock:
+            _area_cache[key] = m
+            while len(_area_cache) > AREA_CACHE_SIZE:
+                _area_cache.popitem(last=False)
     return m
 
 

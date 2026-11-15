@@ -28,6 +28,7 @@ import re
 import sys
 import threading
 import time
+import zlib
 from collections import OrderedDict
 from pathlib import Path
 from typing import Literal, Optional
@@ -49,7 +50,7 @@ CACHE_DIR = Path(os.environ.get("JUKEBOX_CACHE_DIR", ROOT / "backend" / "cache")
 # datasets converted from the team's raw folders by backend/prepare_data.py (the data folder can be read-only)
 BUILT_DIR = Path(os.environ.get("JUKEBOX_BUILT_DIR") or CACHE_DIR / "_datasets")
 CORS = [o.strip() for o in os.environ.get("JUKEBOX_CORS", "*").split(",")]
-API_VERSION = "2.4"
+API_VERSION = "2.5"
 COMPOSITION_ID = re.compile(r"[0-9a-f]{16}")         # what cache_key() produces
 # 1 = a request that names no dataset takes EACH variable from its own best dataset and the composer lines
 # them up by date (temperature since 1880 with precipitation joining in 2000 ...). The Docker image sets it:
@@ -72,6 +73,15 @@ app.add_middleware(CORSMiddleware, allow_origins=CORS, allow_methods=["*"], allo
 _datasets_cache: dict = {"mtime": None, "data": {}}
 
 
+def npz_shape(z, name: str) -> list[int]:
+    """Shape of one array of an open .npz, read from its .npy header only: z[name].shape would load (and
+    inflate) the whole array, ~360 MB for the deployed datasets on every rescan."""
+    with z.zip.open(f"{name}.npy") as fh:
+        major, _ = np.lib.format.read_magic(fh)
+        read = np.lib.format.read_array_header_1_0 if major == 1 else np.lib.format.read_array_header_2_0
+        return list(read(fh)[0])
+
+
 def scan_datasets() -> dict:
     files = [f for d in dict.fromkeys((DATA_DIR, BUILT_DIR)) if d.exists() for f in sorted(d.glob("*.npz"))]
     stamp = tuple((f.name, f.stat().st_mtime) for f in files)
@@ -90,7 +100,7 @@ def scan_datasets() -> dict:
         g = groups.setdefault(prefix, {"id": prefix, "variables": {}, "files": [], "file_of": {}})
         with np.load(f) as z:
             times = [str(t) for t in z["time"]] if "time" in z.files else []
-            shape = list(z["data"].shape)
+            shape = npz_shape(z, "data")
         g["files"].append(f)
         g["file_of"][var] = f
         g["variables"][var] = {"units": meta.get("units"), "vmin": meta.get("vmin"), "vmax": meta.get("vmax"),
@@ -442,9 +452,45 @@ def display_units(info: dict) -> Optional[str]:
 def points_to_cells(points) -> list[list[int]]:
     """Selected lat/lng points -> the distinct [row, col] cells of the 0.1 degree POINT_GRID they fall in, sorted."""
     gh, gw = POINT_GRID
-    cells = sorted({(min(int((90 - p.lat) * gh / 180), gh - 1), min(int(((p.lng + 180) % 360) * gw / 360), gw - 1))
-                    for p in points})
-    return [list(c) for c in cells]
+    lat = np.fromiter((p.lat for p in points), dtype=np.float64, count=len(points))
+    lng = np.fromiter((p.lng for p in points), dtype=np.float64, count=len(points))
+    rows = np.minimum(((90 - lat) * gh / 180).astype(np.int64), gh - 1)          # lat <= 90: never negative
+    cols = np.minimum((((lng + 180) % 360) * gw / 360).astype(np.int64), gw - 1)
+    flat = np.unique(rows * gw + cols)                                            # distinct, sorted by (row, col)
+    return np.stack([flat // gw, flat % gw], axis=1).tolist()
+
+
+MASK_BYTES = POINT_GRID[0] * POINT_GRID[1] // 8      # the POINT_GRID as bits: 810 000 bytes before compression
+
+
+def mask_to_cells(mask: str) -> list[list[int]]:
+    """`mask` of a request -> the [row, col] cells of POINT_GRID it selects, sorted (same as points_to_cells).
+
+    mask = base64( zlib( packbits( POINT_GRID as booleans, row-major, row 0 = 90°N, col 0 = 180°W ) ) ).
+    The webapp marks the 0.1° cell of each of its points: the same cells as sending the points, in a few kB
+    instead of megabytes for an ocean (the browser's CompressionStream("deflate") writes this zlib format)."""
+    try:
+        packed = base64.b64decode(mask, validate=True)
+        z = zlib.decompressobj()
+        bits = z.decompress(packed, MASK_BYTES + 1)                # never inflates more than the grid
+    except (ValueError, zlib.error) as e:
+        raise HTTPException(422, f"mask is not base64 of zlib data: {e}")
+    if len(bits) != MASK_BYTES or not z.eof:
+        raise HTTPException(422, f"mask must hold exactly {POINT_GRID[0]} x {POINT_GRID[1]} bits "
+                                 f"({MASK_BYTES} bytes once inflated), got {len(bits)} bytes")
+    cells = np.argwhere(np.unpackbits(np.frombuffer(bits, dtype=np.uint8)).reshape(POINT_GRID))
+    if not len(cells):
+        raise HTTPException(422, "mask selects no cell")
+    return cells.tolist()
+
+
+def request_cells(req) -> Optional[list[list[int]]]:
+    """The POINT_GRID cells of a request's area, from `mask` (preferred) or `points`; None when it has neither."""
+    if getattr(req, "mask", None):
+        return mask_to_cells(req.mask)
+    if req.points:
+        return points_to_cells(req.points)
+    return None
 
 
 @app.get("/api/instruments")
@@ -484,6 +530,8 @@ class SonifyRequest(BaseModel):
     dataset_id: Optional[str | list[str]] = Field(None, description="a dataset_id of GET /api/instruments, or a list of "
                                                   "them to hear several instruments together")
     points: Optional[list[SonifyPoint]] = Field(None, description="the selected points: [{lat, lng, x, y}, ...]")
+    mask: Optional[str] = Field(None, description="the selected area as a compressed bitmap of the 0.1 degree grid, "
+                                "instead of points (see mask_to_cells / FRONTEND_API.md)")
     time_period: Optional[str | int] = Field(None, description="where the music starts: '1880-01'")
     aggregation: Literal["mean"] = Field("mean", description="how the points are combined: the area-weighted mean")
 
@@ -521,12 +569,13 @@ def make_chunk(req: SonifyRequest, request: Request, duration_s: float = CHUNK_S
             raise HTTPException(400, f"unknown dataset_id '{d}'; available: {ids} (see GET /api/instruments)")
         variables.append(k)
     # which area
-    if req.points:
-        area = {"cells": points_to_cells(req.points), "cells_grid": list(POINT_GRID)}
+    cells = request_cells(req)
+    if cells is not None:
+        area = {"cells": cells, "cells_grid": list(POINT_GRID)}
     elif (req.zone_id or "").lower() in ZONES:
         area = {"zone": req.zone_id.lower()}
     else:
-        raise HTTPException(422, "points is empty: send the selected points [{lat, lng}, ...]")
+        raise HTTPException(422, "points is empty: send the selected points [{lat, lng}, ...] or a mask")
     # pitch_range "series": a long series is played chunk after chunk, so a value must be the same note in each
     body = {"pitch_range": "series", **opts, **area, "variables": variables or None, "duration_s": duration_s,
             "audio": True, "audio_format": audio_format, "include_notes": False}
@@ -568,7 +617,7 @@ def make_chunk(req: SonifyRequest, request: Request, duration_s: float = CHUNK_S
             "audio_format": audio.suffix[1:], "audio_url": out["files"]["audio"],
             "value": first[main][0] if main else None, "units": first[main][1] if main else None,
             "values": {v: x[0] for v, x in first.items()},
-            "point_count": len(req.points or []), "cell_count": score.get("cells"),
+            "point_count": len(req.points) if req.points else len(cells or []), "cell_count": score.get("cells"),
             "aggregation": req.aggregation, "time_end": end_time[:n] if end_time else None,
             "duration_s": score["duration_s"], "composition_id": out["id"], "cached": out["cached"],
             # which dataset of GET /api/datasets was played (the main variable's, when several were merged)
@@ -626,8 +675,17 @@ class ZoneSeriesRequest(BaseModel):
     zone_id: Optional[str] = Field(None, description="the frontend's id of the area; echoed back")
     zone_name: Optional[str] = None
     dataset_ids: list[str] = Field(min_length=1, description="dataset ids of GET /api/instruments")
-    points: list[SonifyPoint] = Field(min_length=1, max_length=MAX_POINTS, description="the selected points [{lat, lng}, ...]")
+    points: Optional[list[SonifyPoint]] = Field(None, min_length=1, max_length=MAX_POINTS,
+                                                description="the selected points [{lat, lng}, ...]")
+    mask: Optional[str] = Field(None, description="the selected area as a compressed bitmap, instead of points "
+                                "(no size limit: see POST /api/zones/zone-data)")
     aggregation: Literal["mean"] = Field("mean", description="how the points are combined: the area-weighted mean")
+
+    @model_validator(mode="after")
+    def _area_given(self):
+        if not self.points and not self.mask:
+            raise ValueError("send the selected points [{lat, lng}, ...] or a mask")
+        return self
 
 
 class _LRU:
@@ -716,7 +774,7 @@ def zone_series(req: ZoneSeriesRequest):
     the `values` of POST /api/zones/zone-data), for a chart. Unknown ids are listed in `missing`."""
     sent = list(dict.fromkeys(req.dataset_ids))
     variable_of, kept = known_dataset_ids(sent)
-    cells = points_to_cells(req.points)
+    cells = request_cells(req)
     digest = hashlib.sha1(json.dumps(cells).encode()).hexdigest()
     series, missing = {}, [d for d in sent if d not in kept]
     for d in kept:
@@ -726,7 +784,8 @@ def zone_series(req: ZoneSeriesRequest):
             missing.append(d)
         else:
             series[d] = entry
-    return {"zone_id": req.zone_id, "step": "month", "point_count": len(req.points), "series": series,
+    return {"zone_id": req.zone_id, "step": "month", "point_count": len(req.points) if req.points else len(cells),
+            "series": series,
             "missing": missing}
 
 

@@ -177,20 +177,33 @@ def cells_mask(shape, cells, land_fraction=None, surface="all", grid=None):
     return mask
 
 
+ZONE_BLOCK = 1_000_000   # values (frames x selected cells) handled at once: ~8 MB per temporary array
+
+
 def zone_series(field, lat, mask):
-    """Area-weighted (cos lat) mean and spatial std per frame, ignoring NaN."""
-    w = np.cos(np.deg2rad(lat))[:, None] * np.ones(field.shape[1:])
-    w = np.where(mask, w, 0.0)
-    means, stds = [], []
-    for f in field:
+    """Area-weighted (cos lat) mean and spatial std per frame, ignoring NaN.
+
+    Only the cells of `mask` are read, a block of frames at a time: the cost is frames x SELECTED cells (not
+    frames x the whole grid), and a whole-globe selection still stays within a few ZONE_BLOCK-sized arrays in memory.
+    `field` is any (frames, lat, lon) array (float16/float32 of an .npz); the sums are done in float64."""
+    rows, cols = np.nonzero(mask)
+    n_frames = field.shape[0]
+    means, stds = np.full(n_frames, np.nan), np.full(n_frames, np.nan)
+    if len(rows) == 0:
+        return means, stds
+    w = np.cos(np.deg2rad(np.asarray(lat, dtype=np.float64)))[rows]
+    step = max(1, ZONE_BLOCK // len(rows))
+    for t0 in range(0, n_frames, step):
+        f = field[t0:t0 + step][:, rows, cols].astype(np.float64)        # (frames, selected cells)
         ww = np.where(np.isnan(f), 0.0, w)
-        s = ww.sum()
-        if s == 0:
-            means.append(np.nan); stds.append(np.nan); continue
-        m = np.nansum(f * ww) / s
-        means.append(m)
-        stds.append(np.sqrt(np.nansum(ww * (f - m) ** 2) / s))
-    return np.array(means), np.array(stds)
+        s = ww.sum(axis=1)
+        ok = s > 0
+        d = np.where(ok, s, 1.0)
+        m = np.nansum(f * ww, axis=1) / d
+        v = np.nansum(ww * (f - m[:, None]) ** 2, axis=1) / d
+        means[t0:t0 + step] = np.where(ok, m, np.nan)
+        stds[t0:t0 + step] = np.where(ok, np.sqrt(v), np.nan)
+    return means, stds
 
 
 # ----------------------------------------------------------------------------
