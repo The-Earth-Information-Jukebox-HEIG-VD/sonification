@@ -3,10 +3,10 @@
 # Build:  docker build -t earth-jukebox-sonification .
 #         docker build -t earth-jukebox-sonification --build-arg WITH_VSCO=1 .   # + real orchestral samples (~440 MB)
 # Run:    docker run -p 8000:8000 -v /path/to/datasets/data:/app/data:ro -v jukebox-cache:/app/cache earth-jukebox-sonification
-#         then  http://localhost:8000/api/health  and  http://localhost:8000/docs  (the frontend's two calls: backend/FRONTEND_API.md)
+#         then  http://localhost:8000/api/health  and  http://localhost:8000/docs  (the frontend's calls: backend/FRONTEND_API.md)
 #
 # How the pieces fit (see the `deployment` repository):
-#   * the `datasets` image fills a volume with the team's RAW data (precipitation_2000_2026/, temperature_anomaly_1880_2025/),
+#   * the `datasets` image fills a volume with the team's RAW data (precipitation_rain_2000_2026/, temperature_anomaly_1880_2025/, ...),
 #     mounted READ-ONLY at /app/data;
 #   * at start-up backend/serve.py converts those folders, in the background, into one dataset per variable and keeps
 #     them in the cache volume (/app/cache/_datasets). It is done once: later starts only rebuild what changed;
@@ -87,7 +87,7 @@ COPY --from=sounds /app/soundfonts/ soundfonts/
 #   JUKEBOX_CACHE_DIR : compositions + the converted datasets (must be writable; a volume keeps them between restarts)
 #   JUKEBOX_PREPARE   : 0 = do not convert raw data at start-up
 #   JUKEBOX_MERGE_DATASETS : 1 = each variable is read from its own dataset and they are lined up by date
-#   JUKEBOX_FULL_API  : 0 = serve only the frontend's calls (GET /api/instruments, POST /api/sonify) and /api/health;
+#   JUKEBOX_FULL_API  : 0 = serve only the frontend's calls (/api/instruments, /api/genres, /api/sonify, /api/zones/zone-data, /api/zones/series, /api/zones/groove) and /api/health;
 #                       1 = also the engine's own endpoints and http://localhost:8000/docs for them
 ENV JUKEBOX_DATA_DIR=/app/data \
     JUKEBOX_CACHE_DIR=/app/cache \

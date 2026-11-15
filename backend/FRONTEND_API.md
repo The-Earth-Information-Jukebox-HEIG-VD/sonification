@@ -39,7 +39,7 @@ One entry per dataset the server has data for:
 
 Two spellings of the same call. Use either.
 
-### `POST /api/zones/zone-data` (the one `webapp/src/services/zoneApi.ts` calls)
+### `POST /api/zones/zone-data` (the one `webapp/src/services/sonificationApi.ts` calls)
 ```json
 {
   "zone_id": "france",
@@ -75,7 +75,7 @@ Response: `zone_id`, `dataset_id`, `time_period`, `next_time_period`, `audio_dat
 | `mask` | the same area as a compressed bitmap, **instead of** `points` (v2.5; recommended for big zones, see below) |
 | `time_period` | where the music starts, `"YYYY-MM"` |
 | `aggregation` | `"mean"` (the only one; `sum`, `max`, `min` are refused with a `422`) |
-| `audio_data` | 30 seconds of music as a base64 MP3. `decodeAudioData` in `zoneApi.ts` plays it as is |
+| `audio_data` | 30 seconds of music as a base64 MP3. `decodeAudioData` in `sonificationApi.ts` plays it as is |
 | `next_time_period` | send it as the next `time_period` to continue. `null` when the data ends |
 | `value` / `values` | the mean of each dataset over the points at `time_period`, in the units of `/api/instruments` |
 | `point_count` | the number of points received (with `mask`: the number of 0.1° cells it selects) |

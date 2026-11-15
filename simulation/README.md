@@ -91,20 +91,19 @@ Turns the extraction team's monthly files (one `.npz` per year, 0.25°) into one
 python simulation/build_monthly_dataset.py --precip ../data_processing/precipitation/monthly_2000_2026
 # -> output/real_monthly_2000_2026_precipitation.npz / .json   (318 months, 1°, about 88 MB)
 python simulation/build_monthly_dataset.py --precip DIR --res 2 --start 2015-01 --min-days 20
-python simulation/build_monthly_dataset.py --temperature datasets/data/temperature_anomaly_1880_2025 --res 2 --prefix real_temperature_1880_2025
-# -> output/real_monthly_1880_2025_surface_temperature.npz / .json   (1752 months, 2°, about 58 MB, ~1 min)
+python simulation/build_monthly_dataset.py --temperature ../datasets/data/temperature_anomaly_1880_2025 --res 2 --prefix real_temperature_1880_2025
+# -> output/real_temperature_1880_2025_surface_temperature.npz / .json   (1752 months, 2°, about 58 MB, ~1 min)
 D=datasets/data      # the team's datasets repo, cloned inside this one (gitignored)
-python simulation/build_monthly_dataset.py --temperature $D/temperature_anomaly_1880_2025 --precip $D/precipitation_2000_2026 \
-    --co2 $D/co2_2002_2022 --res 1 --frames-per-bar 3 --prefix team_monthly_2002_2022
-# -> output/team_monthly_2002_2022_{precipitation,surface_temperature,co2}   (235 common months 2002-09 .. 2022-03, ~2 min)
+python simulation/build_monthly_dataset.py --temperature $D/temperature_anomaly_1880_2025 --precip $D/precipitation_rain_2000_2026 \
+    --snow $D/precipitation_snow_2000_2026 --co2 $D/co2_2002_2022 --res 1 --frames-per-bar 3 --prefix team_monthly_2002_2022
+# -> output/team_monthly_2002_2022_{precipitation,snowfall,surface_temperature,co2}   (235 common months 2002-09 .. 2022-03, ~2 min)
 python -m pytest simulation/test_build_monthly_dataset.py -q      # converter test with small made-up files
 ```
 
 | variable | units | source | how |
 |---|---|---|---|
 | precipitation | mm/day | NASA GPM IMERG (GIBS layer `IMERG_Precipitation_Rate`), monthly mean; yearly `.npz` or one `precipitation_YYYY_MM.npy` per month | `precip_mmh` × 24, area-weighted block mean from 0.25° to `--res` |
-| co2 | ppm | the team's `co2_YYYY_MM.npy` (2002-09 → 2022-03, 356 × 720 = 0.5°, 89N → 89S, assumed north first) | NaN-aware block mean; the missing polar rows are NaN; `vmin/vmax` 365..435 |
-| co2 | ppm | the team's `co2_YYYY_MM.npy` (September 2002 → March 2022) | `--co2 DIR`; area-weighted block mean; `vmin/vmax` 365..435; **outline pixels removed**: the maps still carry the coasts and borders of the source picture as values 10–20 ppm above their neighbours, so a pixel more than 4.5 ppm above the lower quartile of its 10° block, and its four neighbours, become NaN (about 19% of the pixels; `dropped_outline_pixels` in the `.json`) |
+| co2 | ppm | the team's `co2_YYYY_MM.npy` (September 2002 → March 2022, 720 × 1440 float32 = 0.25°) | `--co2 DIR`; area-weighted block mean; `vmin/vmax` 365..435; **outline pixels removed**: the maps still carry the coasts and borders of the source picture as values 10–20 ppm above their neighbours, so a pixel more than 4.5 ppm above the lower quartile of its 10° block, and its four neighbours, become NaN (about 19% of the pixels; `dropped_outline_pixels` in the `.json`) |
 | precipitation (rain) | mm/day | the team's `rain_YYYY_MM.npy`: since precipitation was split into rain and snow, `--precip` reads the rain alone | × 24, area-weighted block mean |
 | snowfall | mm/day of melted water | the team's `snow_YYYY_MM.npy` (June 2000 → November 2026) | `--snow DIR`; × 24; `vmin/vmax` 0..3 (monthly means over a region are 0.05 to 1 mm/day) |
 | fires | fire days per month | the team's `fires_YYYY_MM.npy` (NASA MODIS active fires, July 2002 → November 2026): days of the month with at least one fire in the pixel | `--fires DIR`; area-weighted block mean, so a region's value is its average number of fire days; `vmin/vmax` 0..8 |

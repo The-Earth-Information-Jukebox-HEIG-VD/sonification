@@ -21,6 +21,10 @@
 | Smoke (melody) | 60 | French Horn sustain |
 | Lightning | 47 | Timpani (SoundFont: VSCO has no timpani mapped yet) |
 | Snowfall (melody) | 9 | Glockenspiel (tuning corrected −15 cents) |
+| Fires (swell) | 57 | Trombones (SoundFont: no VSCO recording mapped) |
+| Night lights (swell) | 89 | Synth pad (SoundFont: electronic, no VSCO recording) |
+
+Note: `GM_TO_VSCO` in `music/sampler.py` still maps program 13 to the Xylophone, a leftover from when lightning was a xylophone; no part of the orchestra uses program 13 now (lightning is the timpani, program 47).
 
 `--engine sf2` forces the SoundFont only; `--engine vsco` downloads the samples if they're missing.
 
@@ -41,6 +45,9 @@ Instruments used (GM program → GeneralUser preset):
 | Dust (melody) | 73 | Flute |
 | Smoke (melody) | 60 | French Horns |
 | Lightning | 47 | Timpani |
+| Snowfall (melody) | 9 | Glockenspiel |
+| Fires (swell) | 57 | Trombone |
+| Night lights (swell) | 89 | Pad 2 (warm) |
 
 ## Render
 ```bash

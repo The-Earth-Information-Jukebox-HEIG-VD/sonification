@@ -21,7 +21,7 @@ uvicorn backend.app:app --reload --port 8000
 |---|---|---|
 | `JUKEBOX_DATA_DIR` | `simulation/output` | folder with the intensity maps (`<dataset>_<variable>.npz` + `.json`, see `simulation/INTENSITY_MAP_SPEC.md`). When the real extraction is ready, point this at its output folder: nothing else changes. |
 | `JUKEBOX_CACHE_DIR` | `backend/cache` | generated compositions (safe to delete) |
-| `JUKEBOX_FULL_API` | `1` | `0`: only `/api/instruments`, `/api/sonify` and `/api/health` are served (set in the Docker image) |
+| `JUKEBOX_FULL_API` | `1` | `0`: only `/api/health`, `/api/instruments`, `/api/genres`, `/api/sonify`, `/api/zones/zone-data`, `/api/zones/series` and `/api/zones/groove` are served (set in the Docker image) |
 | `JUKEBOX_CHUNK_SECONDS` | `30` | length of one piece returned by `/api/sonify` |
 | `JUKEBOX_MERGE_DATASETS` | `0` | `1`: a request that names no dataset takes each variable from its own best dataset, lined up by date (set in the Docker image) |
 | `JUKEBOX_BUILT_DIR` | `<cache>/_datasets` | datasets converted from the team's raw folders by `backend/prepare_data.py`; scanned in addition to `JUKEBOX_DATA_DIR`. In the Docker image this happens by itself at start-up (see the README) |
@@ -36,6 +36,7 @@ uvicorn backend.app:app --reload --port 8000
 | GET | `/api/datasets` | available datasets: id, variables (units, range, instrument), number of frames, time range |
 | **POST** | **`/api/zones/zone-data`** | **frontend call**: the same as `/api/sonify` with the webapp's field names (`dataset_ids`, `values`); see `FRONTEND_API.md` |
 | **POST** | **`/api/zones/series`** | **frontend call**: the monthly series of the selected points for each dataset (chart data, no audio); see `FRONTEND_API.md` section 3 |
+| **POST** | **`/api/zones/groove`** | **frontend call** (v2.6): vinyl mode, the music along a path of places at one fixed date; see `FRONTEND_API.md` section 4 |
 | **POST** | **`/api/sonify`** | **frontend call**: selected points + one time period in, 30 s of MP3 inside the JSON out (`FRONTEND_API.md`) |
 | POST | `/api/sonify/debug` | development only: the same with the engine's knobs and a detailed answer |
 | **POST** | **`/api/compose`** | **compose a piece**, with every option and the full score (see below) |
