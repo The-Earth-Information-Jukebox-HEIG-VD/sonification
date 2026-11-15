@@ -271,6 +271,11 @@ All fields are optional. The smallest request is `{}` (global zone, default data
 
 ```
 
+### New in v2.12 (the same month, year after year)
+- optional `"step": "year"` in `POST /api/sonify`, `/api/zones/zone-data` and `/api/compose`: one bar per YEAR, always the month of `time_period` (`2020-11` plays November 2020, November 2021, ...). `next_time_period` is that month in the next year to play. Monthly data only (`400` otherwise; not in vinyl mode).
+- the pitch scale is that month's range over the years, so a warmer November is a higher note than a colder one without the seasons swamping the difference. The temperature still sets the tempo, on the same Novembers.
+- the answer of `/api/zones/zone-data` has `"step": "year"` when it was asked for; without it nothing changes.
+
 ### New in v2.11 (sea ice)
 - new variable from the team's data: **sea ice** (`sea_ice`, bowed glass): the share of the sea covered by ice, in %, monthly, January 1979 to October 2026 (NSIDC Sea Ice Index). Land has no value, so the mean of an area is the share of its sea that is frozen; the bowed glass is high and sustained, louder with more ice, enters above about 5 % and is silent over land and warm seas (the choice planned in `music/README.md`). `ice` and `seaice` are accepted as other names.
 - the source has no December 1987 and January 1988 (a gap between two satellites): those months have no value (`null` in `/api/zones/series`) and the instrument rests; a piece that starts there plays on with February 1988.

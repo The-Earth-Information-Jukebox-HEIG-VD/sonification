@@ -1,6 +1,6 @@
 # The API the frontend uses
 
-Four calls, no required options. (API v2.6: section 4, vinyl mode, is new.) Optional extras of section 2 (API v2.7–2.10): a musical `genre` (with `GET /api/genres` for the menu), music through the ages (`eras`), and the temperature that sets the tempo.
+Four calls, no required options. (API v2.6: section 4, vinyl mode, is new.) Optional extras of section 2 (API v2.7–2.12): a musical `genre` (with `GET /api/genres` for the menu), music through the ages (`eras`), the temperature that sets the tempo, and the same month year after year (`step`).
 
 - Base URL: the backend, e.g. `http://localhost:8000` (behind the webapp's nginx: the same origin, `/api/...`).
 - Everything is JSON. Errors have a `detail` message.
@@ -157,6 +157,19 @@ chunk can cross a boundary, e.g. 1905-1914). Without `"eras": true` nothing chan
 - **The same value is the same note** in every piece of the same area, so consecutive pieces connect.
 - **Errors**: `400` unknown dataset or no data for these points and this period; `422` malformed request (no points, latitude out of range, another `aggregation`).
 - A new area takes about a second on the server (its whole series is read once); the following pieces of the same area are faster (the series is kept in memory), and the same request again is immediate.
+
+### Optional: the same month, year after year (`"step": "year"`, v2.12)
+Add `"step": "year"` and each bar is the same month of the next year, at the same place:
+
+```json
+{"zone_id": "france", "dataset_ids": ["temperature", "precipitation"], "points": [...],
+ "time_period": "2015-11", "step": "year"}
+```
+plays November 2015, November 2016, ... November 2025 (30 s, about 8 to 13 years like the months of the normal
+mode), and answers `"next_time_period": "2026-11"` and `"step": "year"`. Ask for the next piece with that period and
+`step` again. Bar `i` is year `time_period + i`, starting at `bar_starts_s[i]`; `values` are those of the first
+November. Each instrument is scaled on that month over all the years, so a warmer November is a higher note than a
+colder one. Without `step` (or `"step": "month"`) nothing changes.
 
 ### `mask`: big zones in a few kB (v2.5)
 As points, an ocean is ~57 000 entries, about 3 MB of JSON sent again with every piece (the whole globe: 14 MB). `mask` describes the same cells in 2 to 4 kB:

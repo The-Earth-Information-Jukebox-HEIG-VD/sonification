@@ -41,6 +41,7 @@ import glob
 import hashlib
 import json
 import os
+import re
 import sys
 import threading
 from collections import OrderedDict
@@ -1001,7 +1002,7 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
             intro=True, tension=True, climax=True, humanize=0.5,
             style="data", quantize="scale", markers=True, marker_threshold=1.5, audio_engine="auto",
             cells=None, cells_grid=None, duration_s=None, pitch_range="window", series_in=None, eras=False,
-            genre="orchestra", tempo_from_temperature=True, temperature_sound="heartbeat"):
+            genre="orchestra", tempo_from_temperature=True, temperature_sound="heartbeat", step="month"):
     """Data maps -> score. Writes MIDI (+ stems, JSON, optional PNG/audio) to out_dir and returns
     a dict with the score document, file paths and stats.
 
@@ -1040,7 +1041,12 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
     bpm x 0.75 (cold) to x 1.25 (hot); in the realistic mode a heartbeat from 60 to 130 bpm. With duration_s, the number of bars is
     chosen with these tempos so that the piece still lasts duration_s (a hot chunk covers more months).
 
-    temperature_sound (realistic mode): "heartbeat" (default) or "clock" (a ticking clock, tick-tock on each beat)."""
+    temperature_sound (realistic mode): "heartbeat" (default) or "clock" (a ticking clock, tick-tock on each beat).
+
+    step: "month" (default: one bar per month, as the data comes) or "year": the SAME month of successive years,
+    one bar each (start "2020-11" -> November 2020, November 2021, ...), for monthly data. The month is the one of
+    `start` (else of the first date). The pitch scale is then the range of that month's values over the years, so
+    a warmer November is a higher note than a colder November, and the seasons do not swamp the difference."""
     log = print if verbose else (lambda *a, **k: None)
     if style not in ("data", "musical"):
         raise ComposeError("style must be 'data' or 'musical'")
@@ -1138,6 +1144,23 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
         ok = np.isfinite(d["mean"])
         d["span"] = (float(d["mean"][ok].min()), float(d["mean"][ok].max())) if ok.any() else (np.nan, np.nan)
     hint = _align_by_date(full)            # maps from different datasets -> one time axis (no-op for one dataset)
+    if step not in ("month", "year"):
+        raise ComposeError("step must be 'month' or 'year'")
+    if step == "year" and full:            # keep one month of each year: the same month, year after year
+        if series_in is not None:
+            raise ComposeError("step 'year' does not apply to vinyl mode")
+        for var, d in full.items():
+            ts = None if d["times"] is None else [str(t) for t in d["times"]]
+            if not ts or len({t[:7] for t in ts}) != len(ts):
+                raise ComposeError(f"step 'year' needs monthly data ('{var}' is not one map per month)")
+        first_ts = [str(t) for t in next(iter(full.values()))["times"]]
+        mm = str(start)[5:7] if isinstance(start, str) and re.match(r"^\d{4}-\d{2}", str(start)) else first_ts[0][5:7]
+        for d in full.values():
+            sel = np.array([str(t)[5:7] == mm for t in d["times"]])
+            d["mean"], d["z"], d["times"] = d["mean"][sel], d["z"][sel], np.asarray(d["times"])[sel]
+            ok = np.isfinite(d["mean"])    # the pitch scale: this month's range over the years
+            d["span"] = (float(d["mean"][ok].min()), float(d["mean"][ok].max())) if ok.any() else (np.nan, np.nan)
+        hint, frames_per_bar = None, 1     # one frame (one year's month) per bar
 
     # ---- the temperature sets the tempo: the hotter the bar, the faster (data style)
     temp_tempo = None

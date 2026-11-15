@@ -53,7 +53,7 @@ CACHE_DIR = Path(os.environ.get("JUKEBOX_CACHE_DIR", ROOT / "backend" / "cache")
 # datasets converted from the team's raw folders by backend/prepare_data.py (the data folder can be read-only)
 BUILT_DIR = Path(os.environ.get("JUKEBOX_BUILT_DIR") or CACHE_DIR / "_datasets")
 CORS = [o.strip() for o in os.environ.get("JUKEBOX_CORS", "*").split(",")]
-API_VERSION = "2.11"
+API_VERSION = "2.12"
 COMPOSITION_ID = re.compile(r"[0-9a-f]{16}")         # what cache_key() produces
 # 1 = a request that names no dataset takes EACH variable from its own best dataset and the composer lines
 # them up by date (temperature since 1880 with precipitation joining in 2000 ...). The Docker image sets it:
@@ -220,6 +220,8 @@ class ComposeRequest(BaseModel):
     tempo_from_temperature: bool = Field(True, description="data style: each bar's tempo follows the temperature "
                                          "(x0.75 cold .. x1.25 hot; realistic mode: a heartbeat of 60-130 bpm); with "
                                          "duration_s the piece still lasts duration_s. false = one fixed tempo")
+    step: Literal["month", "year"] = Field("month", description="month: one bar per month; year: the same month of "
+                                           "successive years, one bar each (start '2020-11' -> Nov 2020, Nov 2021, ...)")
     temperature_sound: Literal["heartbeat", "clock"] = Field("heartbeat", description="realistic mode: the temperature "
                                                              "as a heartbeat or a ticking clock (its rate = the tempo)")
     eras: bool = Field(False, description="fun mode, music through the ages: each bar is played in the style of its date, "
@@ -435,7 +437,7 @@ def compose(req: ComposeRequest, request: Request):
                 intro=req.intro, tension=req.tension, climax=req.climax, humanize=req.humanize,
                 style=req.style, quantize=req.quantize, markers=req.markers, audio_engine=req.audio_engine,
                 eras=req.eras, genre=req.genre, tempo_from_temperature=req.tempo_from_temperature,
-                temperature_sound=req.temperature_sound)
+                temperature_sound=req.temperature_sound, step=req.step)
         except orchestra.ComposeError as e:
             raise HTTPException(400, str(e))
         (folder / "score_preview.wav").unlink(missing_ok=True)  # rough synth preview not needed here
@@ -607,6 +609,9 @@ class SonifyRequest(BaseModel):
                                  "fire, thunder ...). See GET /api/instruments -> genres. The answer then has `genre`")
     eras: bool = Field(False, description="optional fun mode, music through the ages: the music takes the style of "
                        "the date (Romantic orchestra in 1880 ... modern pop / trap in 2026). The answer then has `era`")
+    step: Literal["month", "year"] = Field("month", description="month (default): one bar per month. year: the same "
+                                           "month of successive years, one bar each: time_period '2020-11' plays "
+                                           "November 2020, November 2021, ...; next_time_period is a November too")
 
 
 class SonifyDebugRequest(SonifyRequest):
@@ -654,6 +659,8 @@ def make_chunk(req: SonifyRequest, request: Request, duration_s: float = CHUNK_S
         opts["eras"] = True
     if req.genre:
         opts["genre"] = resolve_genre(req.genre)
+    if req.step == "year":
+        opts["step"] = "year"
     body = {"pitch_range": "series", **opts, **area, "variables": variables or None, "duration_s": duration_s,
             "audio": True, "audio_format": audio_format, "include_notes": False}
     if req.time_period is not None:
@@ -681,6 +688,9 @@ def make_chunk(req: SonifyRequest, request: Request, duration_s: float = CHUNK_S
     end_time = score.get("time_last_frame") or score["time_end"]       # the last frame played, not the start of the last bar
     last = times.index(end_time) if end_time in times else None
     nxt = times[last + 1][:n] if last is not None and last + 1 < len(times) else None
+    if req.step == "year" and end_time:     # the same month, one year after the last one played
+        later = f"{int(end_time[:4]) + 1:04d}{end_time[4:7]}"
+        nxt = next((t[:n] for t in times if t.startswith(later)), None)
     first = {v: (i["values_per_beat"][0] if i.get("values_per_beat") else None, i.get("units"))
              for v, i in score["instruments"].items() if v not in ("anomaly_markers", "era_drums")}
     # the main variable: the first one asked for that is actually in the piece (a variable with no data in
@@ -708,6 +718,7 @@ def make_chunk(req: SonifyRequest, request: Request, duration_s: float = CHUNK_S
             "anomaly": bool(info.get("anomaly")),                 # value = degC vs normal
             # eras mode: the musical era at the start of the chunk, and every era change inside it
             "genre": score.get("genre", "orchestra"),
+            "step": req.step,                                     # month: a bar per month; year: a bar per year
             "era": score["eras"][0]["name"] if score.get("eras") else None,
             "eras": [{"name": e["name"], "time_period": (e["time"] or "")[:n] or None, "start_s": e["start_s"]}
                      for e in score["eras"]] if score.get("eras") else None}
@@ -753,7 +764,8 @@ def zone_data(req: ZoneDataRequest, request: Request):
             "audio_data": chunk["audio_data"], "values": values, "point_count": chunk["point_count"],
             "duration_s": chunk["duration_s"], "bar_starts_s": chunk["bar_starts_s"],
             **({"era": chunk["era"], "eras": chunk["eras"]} if req.eras else {}),
-            **({"genre": chunk["genre"]} if req.genre else {})}
+            **({"genre": chunk["genre"]} if req.genre else {}),
+            **({"step": "year"} if req.step == "year" else {})}          # without it the answer is unchanged
 
 
 # ----------------------------------------------------------------------------

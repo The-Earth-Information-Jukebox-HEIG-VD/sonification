@@ -437,3 +437,38 @@ def test_sea_ice_from_the_data_step_to_the_webapp_call(tmp_path):
     g = res["gap"]          # 1988-01 is in the satellite gap: no value for it, the chunk plays on with 1988-02
     assert g["status"] == 200 and g["values"].get("sea_ice") is None, g
     assert g["next_time_period"] == "1988-03"
+
+
+STEP_YEAR_CHECK = """
+import json
+from fastapi.testclient import TestClient
+from backend.app import app
+c = TestClient(app)
+pts = [{"lat": 5.0, "lng": 20.0}, {"lat": 6.0, "lng": 21.0}]
+def zone(period, step):
+    r = c.post("/api/zones/zone-data", json={"zone_id": "z", "dataset_ids": ["fires"], "points": pts,
+                                             "time_period": period, "step": step})
+    j = r.json(); j.pop("audio_data", None)
+    return {"status": r.status_code, **j}
+print(json.dumps({"year": zone("2002-08", "year"), "month": zone("2002-08", "month")}))
+"""
+
+
+def test_step_year_plays_the_same_month_of_each_year(tmp_path):
+    raw, cache = tmp_path / "data", tmp_path / "cache"
+    (raw / "fires_2002_2026").mkdir(parents=True)
+    months = [f"{y}-{m:02d}" for y in (2002, 2003, 2004) for m in range(1, 13)]
+    fake_fires(raw / "fires_2002_2026", months)                  # 12 + i fire days: the value grows every month
+    assert "1 dataset(s) built" in prepare(raw, cache / "_datasets")
+    env = {**os.environ, "JUKEBOX_DATA_DIR": str(raw), "JUKEBOX_CACHE_DIR": str(cache), "JUKEBOX_MERGE_DATASETS": "1",
+           "JUKEBOX_FULL_API": "0", "JUKEBOX_CHUNK_SECONDS": "6"}
+    env.pop("JUKEBOX_BUILT_DIR", None)
+    r = subprocess.run([sys.executable, "-c", STEP_YEAR_CHECK], cwd=str(ROOT), env=env, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr[-2000:]
+    res = json.loads(r.stdout.strip().splitlines()[-1])
+    y, m = res["year"], res["month"]
+    # 6 s = 2 bars: August 2002 and August 2003; next comes August 2004
+    assert y["status"] == 200 and y["step"] == "year" and y["time_period"] == "2002-08" and len(y["bar_starts_s"]) == 2
+    assert y["next_time_period"] == "2004-08" and abs(y["values"]["fires"] - (12 + 7)) < 0.01
+    # without step: two months, August and September 2002
+    assert m["status"] == 200 and "step" not in m and m["next_time_period"] == "2002-10"
