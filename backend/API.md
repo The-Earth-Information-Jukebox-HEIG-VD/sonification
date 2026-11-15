@@ -35,6 +35,7 @@ uvicorn backend.app:app --reload --port 8000
 | GET | `/api/instruments` | **frontend call**: the datasets and the instrument that plays each (`FRONTEND_API.md`) |
 | GET | `/api/datasets` | available datasets: id, variables (units, range, instrument), number of frames, time range |
 | **POST** | **`/api/zones/zone-data`** | **frontend call**: the same as `/api/sonify` with the webapp's field names (`dataset_ids`, `values`); see `FRONTEND_API.md` |
+| **POST** | **`/api/zones/series`** | **frontend call**: the monthly series of the selected points for each dataset (chart data, no audio); see `FRONTEND_API.md` section 3 |
 | **POST** | **`/api/sonify`** | **frontend call**: selected points + one time period in, 30 s of MP3 inside the JSON out (`FRONTEND_API.md`) |
 | POST | `/api/sonify/debug` | development only: the same with the engine's knobs and a detailed answer |
 | **POST** | **`/api/compose`** | **compose a piece**, with every option and the full score (see below) |
@@ -42,7 +43,7 @@ uvicorn backend.app:app --reload --port 8000
 | GET | `/api/files/{id}/{file}` | download a generated file (MIDI, MP3/WAV, JSON, PNG); the compose response gives you the full URLs |
 
 ## The frontend's two calls
-`GET /api/instruments` and `POST /api/sonify` are described in **[`FRONTEND_API.md`](FRONTEND_API.md)**, one page, no options. They are all the deployed backend serves.
+`GET /api/instruments`, `POST /api/sonify` / `POST /api/zones/zone-data` and `POST /api/zones/series` (chart data) are described in **[`FRONTEND_API.md`](FRONTEND_API.md)**, one page, no options. They are all the deployed backend serves.
 
 For development, `POST /api/sonify/debug` takes the same request plus the engine's knobs (`duration_s`, `audio_format`, `embed_audio`, and `options` = any field of `/api/compose` below) and answers with every detail: `values` and `units` of each instrument, `time_end`, `duration_s`, `audio_url`, `composition_id`, `source_dataset(s)`, `real_data`, `anomaly`, `cell_count`.
 
@@ -268,6 +269,9 @@ All fields are optional. The smallest request is `{}` (global zone, default data
 }
 
 ```
+
+### New in v2.4 (chart data)
+- `POST /api/zones/series`: points + `dataset_ids` in, one value per month for each dataset out (`start`, `values` with `null` gaps, `units`, `anomaly`, `yearly`). The same area mean as the music (`orchestra.area_series`); cached in memory (256 areas x datasets). Served by the deployed backend too (`FRONTEND_API.md`, section 3).
 
 ### New in v2.3 (instruments after a listening test)
 - lightning: **timpani** (was a xylophone, too close to the snow's glockenspiel).
