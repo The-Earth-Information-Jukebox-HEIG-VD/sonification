@@ -83,6 +83,17 @@ def test_global_scale_same_value_same_note(tmp_path):
     assert first and first == _first_beat_pitches(pieces["flat"], "precipitation")
 
 
+def test_one_point_per_beat(tmp_path):
+    """frames_per_bar = 4: every point is one beat, the notes follow each point (not one value per bar)."""
+    meta = {"variable": "precipitation", "units": "mm/day", "vmin": 0.0, "vmax": 20.0}
+    vals = np.array([2.0, 18.0, 2.0, 18.0, 2.0, 18.0, 2.0, 18.0])          # dry, wet, dry, wet ... beat by beat
+    doc = orchestra.compose([], bbox=(-1, 1, 0, 3), series_in={"precipitation": (vals, meta)}, pitch_range="series",
+                            frames_per_bar=4, bpm=80, out_dir=tmp_path, name="score")["doc"]
+    assert doc["n_bars"] == 2 and abs(doc["duration_s"] - 6.0) < 0.1      # 8 points = 2 bars of 3 s
+    beat_values = doc["instruments"]["precipitation"]["values_per_beat"]
+    assert beat_values == [2.0, 18.0] * 4
+
+
 def _instrument(dataset_id):
     return next((i for i in client.get("/api/instruments").json()["instruments"] if i["dataset_id"] == dataset_id), None)
 
@@ -107,10 +118,18 @@ def test_groove_endpoint():
     # the same places (after snapping) come from the cache: the same piece
     nudged = {**body, "path": [{"lat": p["lat"] + 0.1, "lng": p["lng"] - 0.1} for p in path]}
     assert client.post("/api/zones/groove", json=nudged).json()["audio_data"] == j["audio_data"]
+    assert j["points_per_bar"] == 1 and j["stop_seconds"] == 3.0
     # a whole year instead of a month
     y = client.post("/api/zones/groove", json={**body, "time_period": str(year)})
     assert y.status_code == 200, y.text
     assert y.json()["time_period"] == str(year)
+    # one point per beat: 8 points = 2 bars = 6 s, each point 0.75 s
+    beats = {**body, "points_per_bar": 4, "path": [{"lat": 46.2, "lng": 6.1 + 1.0 * k} for k in range(8)]}
+    b = client.post("/api/zones/groove", json=beats)
+    assert b.status_code == 200, b.text
+    jb = b.json()
+    assert jb["points_per_bar"] == 4 and jb["stop_seconds"] == 0.75 and len(jb["stops"]) == 8
+    assert abs(jb["duration_s"] - 6.0) < 0.2
 
 
 def test_groove_errors():
@@ -119,7 +138,10 @@ def test_groove_errors():
     assert post(time_period="July 2018").status_code == 422
     assert post(time_period="2018-13").status_code == 422
     assert post(path=[]).status_code == 422
-    assert post(path=[{"lat": 0, "lng": k} for k in range(21)]).status_code == 422       # 20 places at most
+    assert post(path=[{"lat": 0, "lng": k} for k in range(21)]).status_code == 422       # 20 bars at most
+    assert post(path=[{"lat": 0, "lng": k} for k in range(84)], points_per_bar=4).status_code == 422   # 80 points
+    assert post(path=[{"lat": 0, "lng": k} for k in range(6)], points_per_bar=4).status_code == 422    # whole bars
+    assert post(points_per_bar=3).status_code == 422
     assert post(radius_deg=50).status_code == 422
     assert post(dataset_ids=["unicorns"]).status_code == 400
     assert post(time_period="1700").status_code == 400                                     # no data at that date

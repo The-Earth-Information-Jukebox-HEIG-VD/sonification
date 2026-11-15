@@ -672,12 +672,13 @@ def zone_data(req: ZoneDataRequest, request: Request):
 
 # ----------------------------------------------------------------------------
 # Frontend contract, vinyl mode: the needle moves through SPACE at one fixed date.
-# The frontend sends the stretch of path the needle crosses next; one place = one bar.
+# The frontend sends the stretch of path the needle crosses next; one point = one bar, or one beat.
 # ----------------------------------------------------------------------------
-GROOVE_BAR_SECONDS = 3.0       # one place per bar, the same bar as the normal mode (30 s = 10 bars): pieces join
+GROOVE_BAR_SECONDS = 3.0       # the same bar as the normal mode (30 s = 10 bars), whatever points_per_bar: pieces join
 GROOVE_SNAP_DEG = 0.5          # places are snapped to this grid, so listeners crossing the same places share the cache
-GROOVE_MAX_STOPS = 20          # places of one request (20 x 3 s = 60 s of music)
-GROOVE_VERSION = 1             # bump when the groove music changes, so cached pieces are not reused
+GROOVE_MAX_BARS = 20           # bars of one request (20 x 3 s = 60 s of music)
+GROOVE_MAX_STOPS = GROOVE_MAX_BARS * 4      # points of one request at 4 points per bar
+GROOVE_VERSION = 2             # bump when the groove music changes, so cached pieces are not reused
 
 
 def _snap(v: float) -> float:
@@ -690,7 +691,10 @@ class GrooveRequest(BaseModel):
     time_period: str = Field(description="the fixed date: '2018-07' (that month) or '2018' (the mean of the year)")
     path: list[SonifyPoint] = Field(min_length=1, max_length=GROOVE_MAX_STOPS,
                                     description="the places the needle crosses, in order: [{lat, lng}, ...]; "
-                                    f"one place = one bar of {GROOVE_BAR_SECONDS:g} s")
+                                    "a multiple of points_per_bar, at most "
+                                    f"{GROOVE_MAX_BARS} bars of {GROOVE_BAR_SECONDS:g} s")
+    points_per_bar: Literal[1, 2, 4] = Field(1, description="points of `path` per bar: 4 = one point per beat "
+                                             f"({GROOVE_BAR_SECONDS / 4:g} s each), 40 points for 30 s")
     radius_deg: float = Field(1.5, ge=0.1, le=10, description="how wide the needle reads: each place is the mean "
                               "over a disc of this radius (degrees)")
 
@@ -702,10 +706,21 @@ class GrooveRequest(BaseModel):
             raise ValueError("time_period must be a month 'YYYY-MM' or a year 'YYYY'")
         return m.group(1) + (f"-{int(m.group(2)):02d}" if m.group(2) else "")
 
+    @model_validator(mode="after")
+    def _whole_bars(self):
+        n, k = len(self.path), self.points_per_bar
+        if n % k:
+            raise ValueError(f"path has {n} points: send a multiple of points_per_bar ({k}), whole bars")
+        if n // k > GROOVE_MAX_BARS:
+            raise ValueError(f"path has {n // k} bars: at most {GROOVE_MAX_BARS} "
+                             f"({GROOVE_MAX_BARS * GROOVE_BAR_SECONDS:g} s)")
+        return self
+
 
 @app.post("/api/zones/groove")
 def zone_groove(req: GrooveRequest, request: Request):
-    """Vinyl mode: the music of a path in space at one date. Every place of `path` is one bar; the values are
+    """Vinyl mode: the music of a path in space at one date. Every point of `path` is one bar, or one beat with
+    points_per_bar = 4 (half a bar with 2); the values are
     read on the needle (a disc of `radius_deg` around the place) and played on each dataset's GLOBAL scale, so
     a value is the same note wherever the needle is. Pieces have a fixed bar length (`bar_seconds`) and key,
     so consecutive stretches of the same groove join without a jump."""
@@ -721,7 +736,8 @@ def zone_groove(req: GrooveRequest, request: Request):
     radius = round(req.radius_deg, 2)
     stamp = sorted((v, f.name, f.stat().st_mtime) for v, f in files.items())
     key = hashlib.sha1(json.dumps({"groove": GROOVE_VERSION, "period": req.time_period, "stops": stops,
-                                   "radius": radius, "_data": stamp, "_v": API_VERSION}).encode()).hexdigest()[:16]
+                                   "radius": radius, "ppb": req.points_per_bar, "_data": stamp,
+                                   "_v": API_VERSION}).encode()).hexdigest()[:16]
     folder = CACHE_DIR / key
     with lock_for(key):
         audio = next((folder / f"score.{e}" for e in ("mp3", "wav") if (folder / f"score.{e}").exists()), None)
@@ -735,7 +751,8 @@ def zone_groove(req: GrooveRequest, request: Request):
             la0, la1 = max(-90.0, min(lats) - radius), min(90.0, max(lats) + radius)
             bbox = (la0, la1 if la1 > la0 else la0 + 1e-3, max(-180.0, min(lngs) - radius), min(180.0, max(lngs) + radius))
             try:
-                orchestra.compose([], bbox=bbox, series_in=series, pitch_range="series", frames_per_bar=1,
+                orchestra.compose([], bbox=bbox, series_in=series, pitch_range="series",
+                                  frames_per_bar=req.points_per_bar,
                                   bpm=60.0 * 4 / GROOVE_BAR_SECONDS, out_dir=folder, name="score",
                                   render=True, audio_format="mp3", audio_engine="auto")
             except orchestra.ComposeError as e:
@@ -754,7 +771,9 @@ def zone_groove(req: GrooveRequest, request: Request):
     return {"zone_id": req.zone_id, "time_period": req.time_period,
             "dataset_ids": [id_of(v) for v in playing],
             "audio_data": base64.b64encode(audio.read_bytes()).decode("ascii"),
-            "duration_s": score["duration_s"], "bar_seconds": GROOVE_BAR_SECONDS, "radius_deg": radius,
+            "duration_s": score["duration_s"], "bar_seconds": GROOVE_BAR_SECONDS,
+            "points_per_bar": req.points_per_bar, "stop_seconds": GROOVE_BAR_SECONDS / req.points_per_bar,
+            "radius_deg": radius,
             "stops": [{"lat": la, "lng": lo, "values": {id_of(v): values[v][i] for v in playing}}
                       for i, (la, lo) in enumerate(stops)]}
 

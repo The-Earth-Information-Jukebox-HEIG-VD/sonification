@@ -139,20 +139,26 @@ No audio: one value per month for each requested dataset, the same area-weighted
 
 ## 4. `POST /api/zones/groove`: vinyl mode, the needle moves through space (API v2.6)
 
-The date stays fixed; what moves is the place. The frontend sends the stretch of path the needle crosses next, the backend answers with its music: **one place = one bar of 3 s**.
+The date stays fixed; what moves is the place. The frontend sends the stretch of path the needle crosses next, the backend answers with its music. Bars are 3 s, as in the normal mode; with `points_per_bar: 4` every point is one beat (0.75 s), so **a 30 s chunk = 40 points**.
 
 ```json
 {
   "zone_id": "record-1",
   "dataset_ids": ["temperature", "precipitation", "lightning", "fires"],
   "time_period": "2018-07",
-  "path": [{"lat": -5.0, "lng": 0.0}, {"lat": -5.0, "lng": 2.5}, {"lat": -5.0, "lng": 5.0}, {"lat": -5.0, "lng": 7.5}],
-  "radius_deg": 1.5
+  "points_per_bar": 4,
+  "radius_deg": 2,
+  "path": [{"lat": -0.5, "lng": 0.0}, {"lat": -0.5, "lng": 9.0}, {"lat": -0.5, "lng": 18.0}, "... 40 points ..."]
 }
 ```
+```js
+// 30 s of an outer groove: a circle of latitude, 9 degrees per point (longitudes past 180 are wrapped)
+const path = Array.from({ length: 40 }, (_, i) => ({ lat: -0.5, lng: i * 9 }));
+```
 - `time_period`: the fixed date, a month `"2018-07"` or a whole year `"2018"` (the mean of its months: calmer, and covers more datasets).
-- `path`: 1 to 20 places, in the order the needle crosses them. 4 places = 12 s of music, 10 places = 30 s.
-- `radius_deg` (default 1.5, from 0.1 to 10): how wide the needle reads. Each place is the mean over a disc of that radius. Wide = smooth music, narrow = detailed and jumpy.
+- `points_per_bar`: 1, 2 or 4 (default 1). How many points of `path` share one 3 s bar: 1 = one point per bar (3 s), 4 = one point per beat (0.75 s).
+- `path`: the points the needle crosses, in order. Whole bars: a multiple of `points_per_bar`, at most 20 bars (60 s) and 80 points. 30 s = 10 bars = 40 points at 4 per bar. Points closer than about 2° add nothing: the maps are 1° (temperature 2°).
+- `radius_deg` (default 1.5, from 0.1 to 10): how wide the needle reads. Each point is the mean over a disc of that radius. Wide = smooth music, narrow = detailed and jumpy. With points 5–10° apart, 2–3° reads more of the ground in between.
 - `dataset_ids`: as for zone-data; omitted = every dataset. `zone_id` optional, echoed back.
 
 ```json
@@ -161,21 +167,24 @@ The date stays fixed; what moves is the place. The frontend sends the stretch of
   "time_period": "2018-07",
   "dataset_ids": ["temperature", "precipitation", "lightning", "fires"],
   "audio_data": "<base64 mp3>",
-  "duration_s": 12.0,
+  "duration_s": 30.0,
   "bar_seconds": 3.0,
-  "radius_deg": 1.5,
+  "points_per_bar": 4,
+  "stop_seconds": 0.75,
+  "radius_deg": 2.0,
   "stops": [
-    {"lat": -5.0, "lng": 0.0, "values": {"temperature": 0.41, "precipitation": 2.1, "lightning": 0.0, "fires": null}},
-    {"lat": -5.0, "lng": 2.5, "values": {"temperature": 0.63, "precipitation": 3.8, "lightning": 0.02, "fires": null}}
+    {"lat": -0.5, "lng": 0.0, "values": {"temperature": 1.23, "precipitation": 0.03, "lightning": 0.0, "fires": 0.0}},
+    {"lat": -0.5, "lng": 9.0, "values": {"temperature": 1.32, "precipitation": 0.28, "lightning": 0.0, "fires": 0.78}}
   ]
 }
 ```
-- `stops[i]` plays from `i × bar_seconds` to `(i + 1) × bar_seconds`: show the needle and its values in step with the music. `null` = no data under the needle there (ocean for fires, beyond 55° for lightning); that instrument is silent for that bar.
+- `stops[i]` plays from `i × stop_seconds` to `(i + 1) × stop_seconds`: move the needle and show its values on that clock. `null` = no data under the needle there (lightning beyond 55°); that instrument is silent there. `0` = data that says "none" (no fire over the ocean): silent too, but known.
 - Places are **snapped to a 0.5° grid** (`stops` gives the snapped positions). Two listeners crossing the same places get the same piece from the cache, in about 0.1 s.
 - **One scale for the whole planet**: a value is the same note wherever the needle is (the dataset's global range), so hot and cold places really sound different. In zone-data, the scale is the zone's own history.
 - Every piece has the same tempo and key: consecutive stretches of a groove join without a jump. Send the next stretch **about 5 s before** the current piece ends: a new stretch takes a few seconds to compose the first time.
 - `dataset_ids` in the answer: the datasets that have data along the path at that date. A dataset whose dates do not cover `time_period` (lightning before 2017) is left out.
-- **Errors**: `400` unknown `dataset_ids`, or no data at that date along the whole path; `422` malformed request (`time_period` not `YYYY-MM` / `YYYY`, no `path` or more than 20 places, `radius_deg` out of range).
+- **Speed** is the frontend's choice: at 9° per point (4 per bar) the needle circles the equator in 30 s. A slower needle = points closer together, not more points per chunk.
+- **Errors**: `400` unknown `dataset_ids`, or no data at that date along the whole path; `422` malformed request (`time_period` not `YYYY-MM` / `YYYY`, no `path`, a `path` that is not whole bars, more than 20 bars or 80 points, `points_per_bar` other than 1, 2, 4, `radius_deg` out of range).
 - The first request at a new date reads each map once (a few seconds); the next requests at that date only read the needle.
 
 Nothing else is served by the deployed backend. The engine's own endpoints and options (`backend/API.md`) exist for development only (`JUKEBOX_FULL_API=1`).
