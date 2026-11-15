@@ -271,6 +271,9 @@ All fields are optional. The smallest request is `{}` (global zone, default data
 
 ```
 
+### New in v2.15 (the heartbeat is the CO2 track)
+- `realistic`: the heartbeat is now the sound of the CO2 track. It beats only when `co2` is selected (in place of the city traffic), and also in the years the CO2 maps do not cover (before 2002-09, after 2022-03), because its speed is the world CO2 record of v2.13, as before. Without `co2`, no heartbeat. With `tempo_source: "temperature"` nothing changes (city traffic for CO2).
+
 ### New in v2.14 (vegetation, carbon monoxide, ocean plankton)
 - three new variables from the team's data, monthly, on the 1° grid:
   - **vegetation** (`vegetation`, clarinet; also `ndvi`): NASA MODIS Terra vegetation index (NDVI), 2000-03 → 2026-10, land only. Silent over deserts (NDVI under about 0.12).

@@ -126,9 +126,8 @@ gets `"genre": "rocknroll"`.
 | snow | soft airy wind | loudness = amount of snow |
 | fires | campfire, plus a fireplace and a low roar for big fires | loudness and size = number of fire days |
 | lightning | real thunderclaps | how often = lightning activity |
-| (always) | a heartbeat, the "pulse of the planet" (synthesised) | it beats on every beat of the tempo, which follows the global CO₂: 60 bpm (a heart at rest) in 1880, about 103 in 2000, 132 today; irregular (skipped and extra beats) above 400 ppm, from 2015 |
+| co2 | a heartbeat, the "pulse of the planet" (synthesised); it beats only when `co2` is selected, even in years without CO₂ maps | it beats on every beat of the tempo, which follows the global CO₂: 60 bpm (a heart at rest) in 1880, about 103 in 2000, 132 today; irregular (skipped and extra beats) above 400 ppm, from 2015 |
 | temperature | a low heat drone (synthesised) | warmer = its tones tremble faster, and a clashing semitone joins when hot |
-| co2 | city traffic | loudness = CO₂ level |
 | night_lights | the 50 Hz hum of street lamps | loudness = brightness |
 | sea_ice | "singing" ice: falling pings of cracks and low creaks of floes (synthesised) | how often = how much ice |
 | vegetation | crickets and a cicada (synthesised) | loudness = how green |

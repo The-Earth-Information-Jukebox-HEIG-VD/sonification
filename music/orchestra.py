@@ -1605,7 +1605,10 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
                            pres=series[p["var"]]["pres"], gate=p["cfg"]["gate"]) for p in parts]
             x, sr = soundscape.render(layers, [b2s(b) for b in range(total_beats + 1)], b2s(total_beats),
                                       temperature_sound=temperature_sound,
-                                      urgency=None if bar_u is None else np.repeat(bar_u, bpb))
+                                      urgency=None if bar_u is None else np.repeat(bar_u, bpb),
+                                      # the heartbeat is the CO2 track's sound: it beats when CO2 is asked for, even
+                                      # where the CO2 maps have no data (its speed is the world CO2 record anyway)
+                                      co2_heart="co2" in full)
         else:
             sf2 = render_audio.ensure_soundfont(render_audio.DEFAULT_SF2)
             x, sr = render_audio.render(paths["midi"], sf2, reverb=reverb, engine=audio_engine)
