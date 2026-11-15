@@ -33,7 +33,7 @@ Listen to `music/output/orchestra_switzerland_all.mp3`, or open the `.mid` in an
 uvicorn backend.app:app --reload --port 8000     # docs: http://localhost:8000/docs
 python backend/test_api.py                        # end-to-end tests
 ```
-**What the frontend uses: [`backend/FRONTEND_API.md`](backend/FRONTEND_API.md)** (API v2.14): `GET /api/genres` (the music styles), `GET /api/instruments` (`?genre=` optional), `POST /api/zones/zone-data` (the music of the selected points, 30 s per chunk), `POST /api/zones/series` (the monthly series, for the chart) and `POST /api/zones/groove` (vinyl mode: the music along a path at one date); `POST /api/sonify` (one dataset, one value) is also served. The engine's own endpoints, for development: [`backend/API.md`](backend/API.md).
+**What the frontend uses: [`backend/FRONTEND_API.md`](backend/FRONTEND_API.md)** (API v2.15): `GET /api/genres` (the music styles), `GET /api/instruments` (`?genre=` optional), `POST /api/zones/zone-data` (the music of the selected points, 30 s per chunk), `POST /api/zones/series` (the monthly series, for the chart) and `POST /api/zones/groove` (vinyl mode: the music along a path at one date); `POST /api/sonify` (one dataset, one value) is also served. The engine's own endpoints, for development: [`backend/API.md`](backend/API.md).
 
 ## Docker (what is deployed)
 ```bash

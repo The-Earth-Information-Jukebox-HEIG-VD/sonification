@@ -1,6 +1,6 @@
 # The API the frontend uses
 
-API v2.14. The frontend calls `GET /api/genres`, `GET /api/instruments`, `POST /api/zones/zone-data`, `POST /api/zones/series` and `POST /api/zones/groove` (plus `GET /api/health`); none has required options. Optional extras of section 2 (API v2.7–2.13): a musical `genre` (with `GET /api/genres` for the menu), music through the ages (`eras`), the CO₂ that sets the tempo, and the same month year after year (`step`).
+API v2.15. The frontend calls `GET /api/genres`, `GET /api/instruments`, `POST /api/zones/zone-data`, `POST /api/zones/series` and `POST /api/zones/groove` (plus `GET /api/health`); none has required options. Optional extras of section 2 (API v2.7–2.13): a musical `genre` (with `GET /api/genres` for the menu), music through the ages (`eras`), the CO₂ that sets the tempo, and the same month year after year (`step`).
 
 - Base URL: the backend, e.g. `http://localhost:8000` (behind the webapp's nginx: the same origin, `/api/...`).
 - Everything is JSON. Errors have a `detail` message.
