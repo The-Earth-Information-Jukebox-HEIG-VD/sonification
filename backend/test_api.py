@@ -216,6 +216,63 @@ def test_sonify_frontend_contract():
     assert client.post("/api/sonify", json={"points": [{"lat": 99, "lng": 0}]}).status_code == 422
 
 
+def _months(a, b):
+    """Months from 'YYYY-MM' a to 'YYYY-MM' b."""
+    return (int(b[:4]) - int(a[:4])) * 12 + int(b[5:7]) - int(a[5:7])
+
+
+def test_zone_series():
+    """POST /api/zones/series: the monthly series of the selected points, the same mean as the zone-data values."""
+    import backend.app as api
+    inst = {r["dataset_id"]: r for r in client.get("/api/instruments").json()["instruments"]}
+    pts = [{"lat": 48.8566, "lng": 2.3522}, {"lat": 46.5, "lng": 6.6}, {"lat": 43.2965, "lng": 5.3698}]
+    body = {"zone_id": "france", "zone_name": "France", "dataset_ids": ["temperature"], "points": pts,
+            "aggregation": "mean"}
+    r = client.post("/api/zones/series", json=body)
+    assert r.status_code == 200, r.text
+    j = r.json()
+    assert list(j) == ["zone_id", "step", "point_count", "series", "missing"]
+    assert j["zone_id"] == "france" and j["step"] == "month" and j["point_count"] == 3 and j["missing"] == []
+    s = j["series"]["temperature"]
+    assert list(s) == ["units", "anomaly", "start", "yearly", "values"]
+    assert s["units"] == inst["temperature"]["units"] and s["yearly"] is False and len(s["start"]) == 7
+    assert len(s["values"]) == _months(s["start"], inst["temperature"]["last_time_period"][:7]) + 1
+    assert all(v is None or isinstance(v, float) for v in s["values"])
+    # parity: the value the music plays for a month is the value of the chart for that month
+    period = "2015-01" if inst["temperature"]["first_time_period"][:7] <= "2015-01" else s["start"]
+    z = client.post("/api/zones/zone-data", json={"zone_id": "france", "dataset_ids": ["temperature"], "points": pts,
+                                                  "time_period": period, "aggregation": "mean"})
+    assert z.status_code == 200, z.text
+    assert z.json()["time_period"] == period
+    assert abs(z.json()["values"]["temperature"] - s["values"][_months(s["start"], period)]) < 1e-3
+    # cache: the same area again (other order, same cells) is served from the LRU, the very same entry
+    hits = api.SERIES_CACHE.hits
+    again = client.post("/api/zones/series", json={**body, "points": pts[::-1]}).json()
+    assert again["series"] == j["series"] and api.SERIES_CACHE.hits == hits + 1
+    cells = api.points_to_cells([api.SonifyPoint(**p) for p in pts])
+    digest = api.hashlib.sha1(api.json.dumps(cells).encode()).hexdigest()
+    ds_id = api.series_dataset("surface_temperature")
+    assert api.area_monthly_series(cells, digest, ds_id, "surface_temperature") is \
+        api.area_monthly_series(cells, digest, ds_id, "surface_temperature")
+    # yearly data: night lights are one map per year
+    if "night_lights" in inst:
+        n = client.post("/api/zones/series", json={**body, "dataset_ids": ["night_lights"]}).json()["series"]["night_lights"]
+        assert n["yearly"] is True and n["anomaly"] is False and n["units"] == inst["night_lights"]["units"]
+        year = [v for v in n["values"][:12]]
+        assert len(set(year)) == 1, "the same value for the 12 months of a year"
+    else:
+        print("skip night lights: no nightlights dataset (backend/prepare_data.py)")
+    # a mix: the unknown ids are listed, the others answered
+    m = client.post("/api/zones/series", json={**body, "dataset_ids": ["temperature", "unicorns"]})
+    assert m.status_code == 200 and m.json()["missing"] == ["unicorns"] and list(m.json()["series"]) == ["temperature"]
+    # errors
+    assert client.post("/api/zones/series", json={**body, "dataset_ids": ["unicorns"]}).status_code == 400
+    assert client.post("/api/zones/series", json={**body, "points": []}).status_code == 422
+    assert client.post("/api/zones/series", json={**body, "dataset_ids": []}).status_code == 422
+    assert client.post("/api/zones/series", json={**body, "aggregation": "max"}).status_code == 422
+    assert client.post("/api/zones/series", json={**body, "points": [{"lat": 0, "lng": 0}] * 20001}).status_code == 422
+
+
 def test_sonify_debug_details():
     """POST /api/sonify/debug (development only): the same chunk with the engine's knobs and every detail."""
     body = {"zone_id": "france", "dataset_id": "temperature", "time_period": "2024-03",

@@ -1,6 +1,6 @@
 # The API the frontend uses
 
-Two calls. No options.
+Three calls. No options. (API v2.4)
 
 - Base URL: the backend, e.g. `http://localhost:8000` (behind the webapp's nginx: the same origin, `/api/...`).
 - Everything is JSON. Errors have a `detail` message.
@@ -89,5 +89,42 @@ Response: `zone_id`, `dataset_id`, `time_period`, `next_time_period`, `audio_dat
 - A first request takes 2 to 5 seconds; the same request again is immediate.
 
 `GET /api/health` answers `{"status": "ok", ...}` when the server is up; `"preparing_data": true` means it is still loading its datasets after a start (a few minutes, once).
+
+## 3. `POST /api/zones/series`: the whole monthly series of the points, for a chart (API v2.4)
+
+No audio: one value per month for each requested dataset, the same area-weighted mean (cos latitude, cells of 0.1°) as the `values` of `POST /api/zones/zone-data`. The value zone-data plays for a month is the value of the chart for that month.
+
+```json
+{
+  "zone_id": "france", "zone_name": "France",
+  "dataset_ids": ["temperature", "night_lights"],
+  "points": [{"lat": 48.8566, "lng": 2.3522}, {"lat": 43.2965, "lng": 5.3698}],
+  "aggregation": "mean"
+}
+```
+`dataset_ids`: at least one id of `GET /api/instruments`. `points`: 1 to 20 000 `{lat, lng}` (`x`, `y` accepted, not used). `zone_id`, `zone_name` optional. `aggregation`: only `"mean"`.
+
+```json
+{
+  "zone_id": "france",
+  "step": "month",
+  "point_count": 2,
+  "series": {
+    "temperature":  {"units": "degC anomaly", "anomaly": true, "start": "1880-01", "yearly": false,
+                     "values": [-0.4215, -0.1022, null, ...]},
+    "night_lights": {"units": "brightness (0-1)", "anomaly": false, "start": "2012-01", "yearly": true,
+                     "values": [0.1532, 0.1532, ...]}
+  },
+  "missing": []
+}
+```
+- `values[i]` is the month `start + i`; the axis has no gap (one value per month up to the dataset's last month), a month without data is `null`. Values are rounded to 4 decimals.
+- `start` is **per dataset**: the first month of that dataset's own data (temperature 1880-01, precipitation 2000-06, night lights 2012-01 ...), the same as its `first_time_period` in `GET /api/instruments`.
+- `units` is the same text as `units` in `GET /api/instruments`; `anomaly: true` = degrees away from a normal.
+- `yearly: true` (`night_lights`): one map per year, so the 12 months of a year have the same value. Draw it as steps.
+- Daily data is averaged per month.
+- `missing`: the requested ids the server has no data for. They are left out of `series`, not an error, as long as one id is known.
+- **Errors**: `400` when none of the ids is known (same message as zone-data); `422` malformed request (no points, more than 20 000, no `dataset_ids`, another `aggregation`).
+- The first request for an area takes up to about a second (the 1880 → today temperature); the same area again is immediate (cached).
 
 Nothing else is served by the deployed backend. The engine's own endpoints and options (`backend/API.md`) exist for development only (`JUKEBOX_FULL_API=1`).

@@ -897,6 +897,26 @@ def _time_window(times, start, end, count=None):
     return slice(lo, hi + 1)
 
 
+def area_mean(z, mask):
+    """Mean of the map over `mask`, per frame: cos-latitude weighted, NaN ignored (zone_to_midi.zone_series).
+    The ONE way an area is averaged: the music (compose) and the chart (POST /api/zones/series) both use it."""
+    m, _ = zone_series(z["data"].astype(np.float32), z["lat"], mask)
+    return m
+
+
+def area_series(src, cells, cells_grid=None, surface="all"):
+    """Mean per frame of one map over an area given as cells: load_map -> cells_mask -> area_mean.
+
+    src        : path of a map (.npz) or an already loaded (z, meta) pair from load_map
+    cells      : [[row, col], ...] on the data array, or on `cells_grid` when it is given (rescaled)
+    Returns (mean [T], mask [H, W], times [T] or None, meta). Raises ValueError for an invalid selection."""
+    z, meta = load_map(str(src)) if isinstance(src, (str, Path)) else src
+    land = z["land_fraction"] if "land_fraction" in z.files else None
+    mask = cells_mask((len(z["lat"]), len(z["lon"])), cells, land, surface, grid=cells_grid)
+    times = z["time"] if "time" in z.files else None
+    return area_mean(z, mask), mask, times, meta
+
+
 def _align_by_date(full: dict):
     """Put the variables on ONE time axis when their maps come from different datasets.
 
@@ -1004,17 +1024,17 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
         land = z["land_fraction"] if "land_fraction" in z.files else None
         try:
             if use_cells:
-                mask = cells_mask((len(z["lat"]), len(z["lon"])), cells, land, surface, grid=cells_grid)
+                m, mask, times, _ = area_series((z, meta), cells, cells_grid, surface)
                 if bbox is None:
                     la, lo = z["lat"][mask.any(axis=1)], z["lon"][mask.any(axis=0)]
                     bbox = (float(la.min()), float(la.max()), float(lo.min()), float(lo.max()))
                     n_cells = int(mask.sum())
             else:
                 mask = zone_mask(z["lat"], z["lon"], bbox, land, surface)
+                times = z["time"] if "time" in z.files else None
+                m = area_mean(z, mask)
         except ValueError as e:
             raise ComposeError(str(e))
-        times = z["time"] if "time" in z.files else None
-        m, _ = zone_series(z["data"].astype(np.float32), z["lat"], mask)
         # anomaly vs the seasonal normal, computed on the FULL series before any time window
         _, zsc, _ = comp.seasonal_anomaly(m, times, log=var in comp.SKEWED,
                                           already_anomaly=bool(meta.get("anomaly")))
