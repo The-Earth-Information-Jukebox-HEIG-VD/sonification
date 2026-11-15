@@ -4,7 +4,10 @@
     snowfall    -> soft wind, high and airy                                         loudness = amount
     fires       -> a campfire, plus a fireplace and a low roar for big fires        loudness / size = amount
     lightning   -> real thunderclaps (5 recordings), as many as the flashes          claps per beat = activity
-    temperature -> a heartbeat, "the pulse of the planet": one beat per musical beat, and the tempo follows the
+    (by default, tempo_source "co2": the heartbeat plays on its own at the CO2's tempo, whatever the variables,
+     irregular above 400 ppm; the temperature is then a heat drone that trembles and clashes more as it warms,
+     and the whole soundscape gets louder with the CO2; see urgency.py)
+    temperature -> (tempo_source "temperature") a heartbeat, "the pulse of the planet": one beat per musical beat, and the tempo follows the
                    temperature (60 bpm, a heart at rest, when coldest -> 130 bpm when hottest; set by
                    orchestra.compose); louder and harder when hotter (synthesised) rate / loudness = value
                    (temperature_sound="clock": a real ticking clock instead, one tick per beat)
@@ -72,9 +75,10 @@ THUNDERS = [k for k in CLIPS if k.startswith("thunder")]
 TICKS = [k for k in CLIPS if k.startswith("tick_")]
 
 # what each variable sounds like (for the score / API instrument list)
+HEART_NAME = "Heartbeat (faster when warmer)"     # the temperature's sound with tempo_source "temperature"
 SOUND_NAMES = {
     "precipitation": "Rain sounds", "snowfall": "Snowy wind", "fires": "Crackling fire", "lightning": "Thunder",
-    "surface_temperature": "Heartbeat (faster when warmer)", "co2": "City traffic",
+    "surface_temperature": "Heat drone (trembles and clashes when warmer)", "co2": "City traffic",
     "nightlights": "Street-lamp hum", "aerosol_dust": "Desert wind", "aerosol_smoke": "Smouldering fire",
     "sea_ice": "Singing, creaking ice",
 }
@@ -252,24 +256,61 @@ def _thump(f_start, f_end, dur, drive=2.5):
 
 
 HEART = {}
+IRREGULAR_FROM = 0.786      # urgency of 400 ppm (urgency.py): from there on the heart beats irregularly
 
 
-def heartbeat(beat_times, values, n):
+def heat_drone(values, beat_times, n):
+    """The temperature when the CO2 sets the tempo: a low drone of two tones a fifth apart, each with a slightly detuned twin.
+    The warmer, the more the twins drift apart (slow beating -> a fast, nervous tremble) and, when hot, a
+    clashing semitone joins. values: 0..1 per beat (NaN = silent)."""
+    v = envelope(values, beat_times, n)
+    on = envelope(np.isfinite(np.asarray(values, dtype=float)).astype(float), beat_times, n)
+    t = np.arange(n) / SR
+    y = np.zeros(n)
+    for f, a in ((110.0, 1.0), (165.0, 0.6)):
+        det = f * (1 + (0.004 + 0.05 * v) * 0.5)         # beating 0.2 Hz (calm) -> about 3-4 Hz (hot)
+        y += a * (np.sin(2 * np.pi * f * t) + np.sin(2 * np.pi * np.cumsum(det) / SR))
+    clash = np.clip((v - 0.6) / 0.4, 0, 1)
+    y += 0.7 * clash * np.sin(2 * np.pi * 116.54 * t)    # B-flat against A: a semitone
+    y = np.tanh(1.5 * y / 3.5)
+    amp = (0.25 + 0.75 * v) * on
+    y = y * amp * 10 ** (-17 / 20)
+    return np.stack([y, y], 1).astype(np.float32)
+
+
+def heartbeat(beat_times, values, n, irregular=None, seed=11):
     """A 'lub-dub' at the start of every beat. values: 0..1 per beat (NaN = no data = silent): louder and a
-    little harder when hotter. The 'dub' follows the 'lub' a little sooner when the heart beats faster."""
+    little harder when hotter. The 'dub' follows the 'lub' a little sooner when the heart beats faster.
+    irregular: 0..1 per beat (the CO2's urgency): above IRREGULAR_FROM the heart starts to miss beats and to add
+    premature ones, more and more often (up to about one beat in four at the top)."""
     if not HEART:
         HEART.update(lub=_thump(95, 48, 0.22, drive=5.0), dub=_thump(120, 60, 0.15, drive=4.0))   # strong harmonics: heard on small speakers
     out = np.zeros(n, np.float32)
+    rng = np.random.default_rng(seed)
+    missed = False
+
+    def beat(t0, period, a):
+        for grain, at, g in ((HEART["lub"], 0.0, 1.0), (HEART["dub"], min(0.3, 0.36 * period), 0.65)):
+            i = int((t0 + at) * SR)
+            if i >= n:
+                continue
+            seg = grain[: max(0, n - i)]
+            out[i:i + len(seg)] += seg * a * g
     for b in range(len(beat_times) - 1):
         v = values[b] if b < len(values) else np.nan
         if not np.isfinite(v):
             continue
         period = beat_times[b + 1] - beat_times[b]
         a = 0.45 + 0.55 * float(v)              # always clearly there: the pulse leads the mix
-        for grain, at, g in ((HEART["lub"], 0.0, 1.0), (HEART["dub"], min(0.3, 0.36 * period), 0.65)):
-            i = int((beat_times[b] + at) * SR)
-            seg = grain[: max(0, n - i)]
-            out[i:i + len(seg)] += seg * a * g
+        r = 0.0 if irregular is None or b >= len(irregular) else float(irregular[b])
+        k = float(np.clip((r - IRREGULAR_FROM) / (1 - IRREGULAR_FROM), 0, 1))
+        if k > 0 and not missed and rng.random() < 0.13 * k:
+            missed = True                        # a skipped beat: silence, then a stronger one
+            continue
+        beat(beat_times[b], period, a * (1.25 if missed else 1.0))
+        missed = False
+        if k > 0 and rng.random() < 0.13 * k:   # a premature extra beat, weaker, early in the gap
+            beat(beat_times[b] + 0.55 * period, 0.45 * period, a * 0.6)
     out *= 10 ** (3 / 20)
     return np.stack([out, out], 1)
 
@@ -340,9 +381,11 @@ def roar(n, rng):
 
 
 # ---------------------------------------------------------------- the mix
-def render(layers, beat_times, total_s, seed=7, tail_s=1.0, temperature_sound="heartbeat"):
+def render(layers, beat_times, total_s, seed=7, tail_s=1.0, temperature_sound="heartbeat", urgency=None):
     """layers: [{var, role, norm: per-beat 0..1 value, pres: per-beat 0..1 amount, gate}], beat_times: start of each
-    beat in seconds (+ the end). Returns (stereo float32, SR)."""
+    beat in seconds (+ the end). Returns (stereo float32, SR).
+    urgency: 0..1 per beat (tempo_source "co2", from the global CO2): the heart beats with it (whatever the variables),
+    irregular above 400 ppm, the temperature becomes a heat drone, and the whole soundscape gets louder."""
     rng = np.random.default_rng(seed)
     n = int((total_s + tail_s) * SR)
     mix = np.zeros((n, 2), np.float32)
@@ -378,6 +421,8 @@ def render(layers, beat_times, total_s, seed=7, tail_s=1.0, temperature_sound="h
                     side = rng.integers(2)
                     mix[i:i + len(seg), side] += seg[:, side] * g
                     mix[i:i + len(seg), 1 - side] += seg[:, 1 - side] * g * pan
+        elif var == "surface_temperature" and urgency is not None:
+            mix += heat_drone(np.asarray(L["norm"], dtype=float), beat_times, n)   # the heart is the CO2's
         elif var == "surface_temperature":
             # the heartbeat beats on every beat: its speed is the tempo, which follows the temperature
             vals = np.asarray(L["norm"], dtype=float)
@@ -390,6 +435,11 @@ def render(layers, beat_times, total_s, seed=7, tail_s=1.0, temperature_sound="h
             mix += loop(clip("wind", lo=250, hi=4000), n, rng) * (p ** 0.8)[:, None] * 0.9
         elif var == "sea_ice":
             mix += ice(beat_times, pres, n, rng)
+    if urgency is not None:
+        u = np.asarray(urgency, dtype=float)
+        mix *= (0.7 + 0.3 * envelope(u, beat_times, n))[:, None]
+        heart += clock(beat_times, u, n, rng) if temperature_sound == "clock" else \
+            heartbeat(beat_times, u, n, irregular=u)
     if np.any(heart):
         # ducking ("pumping"): on every beat the other sounds dip for a moment, so the pulse always comes through
         # and the whole soundscape breathes with it: the urgency is felt, not only heard

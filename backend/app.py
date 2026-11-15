@@ -53,7 +53,7 @@ CACHE_DIR = Path(os.environ.get("JUKEBOX_CACHE_DIR", ROOT / "backend" / "cache")
 # datasets converted from the team's raw folders by backend/prepare_data.py (the data folder can be read-only)
 BUILT_DIR = Path(os.environ.get("JUKEBOX_BUILT_DIR") or CACHE_DIR / "_datasets")
 CORS = [o.strip() for o in os.environ.get("JUKEBOX_CORS", "*").split(",")]
-API_VERSION = "2.12"
+API_VERSION = "2.13"
 COMPOSITION_ID = re.compile(r"[0-9a-f]{16}")         # what cache_key() produces
 # 1 = a request that names no dataset takes EACH variable from its own best dataset and the composer lines
 # them up by date (temperature since 1880 with precipitation joining in 2000 ...). The Docker image sets it:
@@ -216,17 +216,22 @@ class ComposeRequest(BaseModel):
     humanize: float = Field(0.5, ge=0, le=1, description="musical style: phrase dynamics + human timing")
     genre: str = Field("orchestra", description="musical genre of the whole piece (GET /api/instruments -> genres): "
                        "orchestra (default), ragtime, swing, rocknroll, funk, synthpop, house, trap, or realistic "
-                       "(recordings: rain, fire, thunder ...; the temperature is a heartbeat)")
-    tempo_from_temperature: bool = Field(True, description="data style: each bar's tempo follows the temperature "
-                                         "(x0.75 cold .. x1.25 hot; realistic mode: a heartbeat of 60-130 bpm); with "
+                       "(recordings: rain, fire, thunder ...; a heartbeat at the CO2's tempo)")
+    tempo_from_temperature: bool = Field(True, description="data style: each bar has its own tempo, set by "
+                                         "tempo_source (the CO2 by default; the name is kept for compatibility); with "
                                          "duration_s the piece still lasts duration_s. false = one fixed tempo")
     step: Literal["month", "year"] = Field("month", description="month: one bar per month; year: the same month of "
                                            "successive years, one bar each (start '2020-11' -> Nov 2020, Nov 2021, ...)")
-    temperature_sound: Literal["heartbeat", "clock"] = Field("heartbeat", description="realistic mode: the temperature "
-                                                             "as a heartbeat or a ticking clock (its rate = the tempo)")
+    temperature_sound: Literal["heartbeat", "clock"] = Field("heartbeat", description="realistic mode: the pulse "
+                                                             "(its rate = the tempo) as a heartbeat or a ticking clock")
     eras: bool = Field(False, description="fun mode, music through the ages: each bar is played in the style of its date, "
                        "Romantic orchestra before 1910, ragtime, swing, rock'n'roll, funk & disco, synth-pop, house, "
                        "modern pop / trap from 2010 (data style only)")
+    tempo_source: Literal["co2", "temperature"] = Field("co2", description="what sets each bar's tempo (when "
+                                                         "tempo_from_temperature is true): co2 (default), the global "
+                                                         "CO2 of the bar's dates, faster with the years (x0.8 in 1880 to "
+                                                         "x1.25 today; realistic: a heartbeat of 60 to ~135 bpm, irregular "
+                                                         "above 400 ppm); temperature: the bar's temperature")
     include_notes: bool = Field(True, description="include every note in the response (set false for a lighter payload)")
     score_image: bool = Field(False, description="also produce a PNG of the score")
 
@@ -437,7 +442,7 @@ def compose(req: ComposeRequest, request: Request):
                 intro=req.intro, tension=req.tension, climax=req.climax, humanize=req.humanize,
                 style=req.style, quantize=req.quantize, markers=req.markers, audio_engine=req.audio_engine,
                 eras=req.eras, genre=req.genre, tempo_from_temperature=req.tempo_from_temperature,
-                temperature_sound=req.temperature_sound, step=req.step)
+                temperature_sound=req.temperature_sound, step=req.step, tempo_source=req.tempo_source)
         except orchestra.ComposeError as e:
             raise HTTPException(400, str(e))
         (folder / "score_preview.wav").unlink(missing_ok=True)  # rough synth preview not needed here
@@ -523,7 +528,7 @@ GENRE_INFO = {   # id -> what the frontend shows in its genre menu
     "synthpop": "Polysynth, synth bass, square lead, synth brass, drum machine",
     "house": "Off-beat piano and bass, saw lead, four-on-the-floor",
     "trap": "Electric-piano arpeggios, 808 bass, synth lead, hi-hat rolls",
-    "realistic": "No instruments: the sound of each phenomenon (rain, fire, thunder, traffic ...), the temperature as a heartbeat",
+    "realistic": "No instruments: the sound of each phenomenon (rain, fire, thunder, traffic ...), with a heartbeat that follows the CO2",
 }
 
 

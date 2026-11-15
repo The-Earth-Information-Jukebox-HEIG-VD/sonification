@@ -1,6 +1,6 @@
 # The API the frontend uses
 
-Four calls, no required options. (API v2.6: section 4, vinyl mode, is new.) Optional extras of section 2 (API v2.7–2.12): a musical `genre` (with `GET /api/genres` for the menu), music through the ages (`eras`), the temperature that sets the tempo, and the same month year after year (`step`).
+Four calls, no required options. (API v2.6: section 4, vinyl mode, is new.) Optional extras of section 2 (API v2.7–2.13): a musical `genre` (with `GET /api/genres` for the menu), music through the ages (`eras`), the CO₂ that sets the tempo, and the same month year after year (`step`).
 
 - Base URL: the backend, e.g. `http://localhost:8000` (behind the webapp's nginx: the same origin, `/api/...`).
 - Everything is JSON. Errors have a `detail` message.
@@ -123,7 +123,8 @@ gets `"genre": "rocknroll"`.
 | snow | soft airy wind | loudness = amount of snow |
 | fires | campfire, plus a fireplace and a low roar for big fires | loudness and size = number of fire days |
 | lightning | real thunderclaps | how often = lightning activity |
-| temperature | a heartbeat, the "pulse of the planet" (synthesised) | it beats on every beat of the tempo: 60 bpm (a heart at rest) when cold, up to 130 bpm when hot; louder too |
+| (always) | a heartbeat, the "pulse of the planet" (synthesised) | it beats on every beat of the tempo, which follows the global CO₂: 60 bpm (a heart at rest) in 1880, about 103 in 2000, 132 today; irregular (skipped and extra beats) above 400 ppm, from 2015 |
+| temperature | a low heat drone (synthesised) | warmer = its tones tremble faster, and a clashing semitone joins when hot |
 | co2 | city traffic | loudness = CO₂ level |
 | night_lights | the 50 Hz hum of street lamps | loudness = brightness |
 | sea_ice | "singing" ice: falling pings of cracks and low creaks of floes (synthesised) | how often = how much ice |
@@ -150,7 +151,7 @@ The data still decides every pitch and loudness; the drums hit harder in hot yea
 chunk can cross a boundary, e.g. 1905-1914). Without `"eras": true` nothing changes, and these fields are absent.
 
 ### What to expect
-- **The temperature sets the tempo**: each bar (one month) is faster when it is hotter (from 0.75x to 1.25x the genre's tempo; a heartbeat of 60 to 130 bpm in `realistic`), on a scale of the whole series of the area, so the same temperature is the same tempo in every chunk. A chunk is still 30 seconds, so **30 seconds is about 8 to 13 months** (10 at an average temperature): a hot period goes by faster. The next period after `2015-01` is about `2015-11`, not `2015-02`: always use `next_time_period`, do not add one month yourself. Month `i` of the chunk starts at `bar_starts_s[i]` seconds (the bars are not 3 s long): follow the clock with `bar_starts_s` and `duration_s` (v2.10). Example, 2015-01 at an average temperature: `[0, 2.77, 6.01, 8.92, ...]` (10 months); in rock'n'roll the same chunk has 21 bars of about 1.4 s.
+- **The CO₂ sets the tempo** (v2.13, every genre): each bar (one month) is played at the tempo of the global CO₂ of its date, so the music speeds up with the years: from 0.8x the genre's tempo in 1880 (290 ppm) to about 1.23x today (425 ppm); in `realistic` a heartbeat of 60 bpm in 1880, 75 in 1960, 103 in 2000, 132 today, which turns irregular above 400 ppm and over which the whole soundscape gets louder. CO₂ almost never goes down, so the heart never slows: this is how the piece makes the climate crisis heard. The same date is the same tempo in every chunk and every area. A chunk is still 30 seconds, so **30 seconds is about 8 months in 1880 and 12 to 13 months today**: always use `next_time_period`, do not add one month yourself. Month `i` of the chunk starts at `bar_starts_s[i]` seconds (the bars are not 3 s long): follow the clock with `bar_starts_s` and `duration_s` (v2.10).
 - **`time_period` in the answer is where the music really starts.** It differs from the request only when you ask for a date before the first data.
 - **Several datasets**: each instrument plays where its own data exists and is silent elsewhere (temperature and precipitation from 1999: the violins come in in June 2000).
 - **Yearly data** (`night_lights`): the value is the year's. The synth pad starts clearly each January, when the value changes, then fades slowly over the year to a softer background note.

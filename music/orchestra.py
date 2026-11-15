@@ -1002,7 +1002,8 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
             intro=True, tension=True, climax=True, humanize=0.5,
             style="data", quantize="scale", markers=True, marker_threshold=1.5, audio_engine="auto",
             cells=None, cells_grid=None, duration_s=None, pitch_range="window", series_in=None, eras=False,
-            genre="orchestra", tempo_from_temperature=True, temperature_sound="heartbeat", step="month"):
+            genre="orchestra", tempo_from_temperature=True, temperature_sound="heartbeat", step="month",
+            tempo_source="co2"):
     """Data maps -> score. Writes MIDI (+ stems, JSON, optional PNG/audio) to out_dir and returns
     a dict with the score document, file paths and stats.
 
@@ -1036,10 +1037,15 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
     the last), or "realistic": every variable is heard as the sound of what it is (rain, fire, thunder, a heartbeat
     ...; soundscape.py). bpm None = the genre's usual tempo (76 for the orchestra and the realistic mode).
 
-    tempo_from_temperature (data style, default on): each bar's tempo follows the temperature of that bar, scaled on
-    the whole series of the area (5th..95th percentile; the same temperature = the same tempo in every piece):
-    bpm x 0.75 (cold) to x 1.25 (hot); in the realistic mode a heartbeat from 60 to 130 bpm. With duration_s, the number of bars is
-    chosen with these tempos so that the piece still lasts duration_s (a hot chunk covers more months).
+    tempo_from_temperature (data style, default on): each bar has its own tempo, set by `tempo_source`; False = one
+    fixed tempo. (The name is kept for compatibility: the tempo now follows the CO2 by default.)
+    tempo_source: "co2" (default): the global CO2 of the bar's dates (urgency.py: Law Dome ice cores + Mauna Loa),
+    which almost only goes up, so the music speeds up with the years: the genre's bpm x 0.8 (290 ppm, 1880) to
+    x 1.25 (430 ppm, 2025); in the realistic mode a heartbeat from 60 to about 135 bpm, which turns irregular above
+    400 ppm, and the temperature is then a heat drone (soundscape.py). "temperature": the bar's temperature on the
+    5th..95th percentile of the area's whole series, x 0.75 (cold) to x 1.25 (hot), heartbeat 60-130 bpm.
+    The same date (co2) or the same temperature gives the same tempo in every piece. With duration_s, the number of
+    bars is chosen with these tempos so that the piece still lasts duration_s.
 
     temperature_sound (realistic mode): "heartbeat" (default) or "clock" (a ticking clock, tick-tock on each beat).
 
@@ -1164,8 +1170,36 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
 
     # ---- the temperature sets the tempo: the hotter the bar, the faster (data style)
     temp_tempo = None
+    if tempo_source not in ("co2", "temperature"):
+        raise ComposeError("tempo_source must be 'co2' or 'temperature'")
+    import urgency as urg
+    drv = None
+    if tempo_from_temperature and tempo_source == "co2" and series_in is None and not musical:
+        drv = full.get(LEAD_VAR) if full.get(LEAD_VAR, {}).get("times") is not None else \
+            next((d for d in full.values() if d["times"] is not None), None)
+    if drv is not None:                    # the global CO2 sets the tempo (no dates: no tempo change)
+
+        def bar_bpm_u(times_seg):
+            u_ = urg.urgency_of_times(times_seg)
+            u_ = 0.5 if not np.isfinite(u_) else u_
+            return 60.0 + 75.0 * u_ if gkey == "realistic" else base_bpm * (0.8 + 0.45 * u_)
+        fpb_t = float(frames_per_bar or hint or drv["meta"].get("frames_per_bar", 1.0))
+        temp_tempo = dict(bar_bpm=None, bar_bpm_times=bar_bpm_u, scale=1.0, source="co2")
+        if bars_wanted is not None:        # as many bars as fit in duration_s at THEIR tempo
+            win0 = _time_window(drv["times"], start, end, None)
+            i0, i1 = (0, len(drv["times"])) if win0 is None else (win0.start, win0.stop)
+            total, n = 0.0, 0
+            while i0 + n * fpb_t < i1 - 1e-9:
+                a, b = int(round(i0 + n * fpb_t)), int(round(i0 + (n + 1) * fpb_t))
+                d_ = int(beats_per_bar) * 60.0 / bar_bpm_u(drv["times"][a:max(b, a + 1)])
+                if n > 0 and total + d_ / 2 > duration_s:
+                    break
+                total, n = total + d_, n + 1
+            bars_wanted = n
+            temp_tempo["scale"] = total / duration_s if total < duration_s * 2 else 1.0
+    # ---- (tempo_source "temperature") the hotter the bar, the faster
     # (not in vinyl mode: there the values are places along a path, at one date, on Teo's fixed grid of points per bar)
-    if tempo_from_temperature and series_in is None and not musical and LEAD_VAR in full \
+    if temp_tempo is None and tempo_from_temperature and tempo_source == "temperature" and series_in is None and not musical and LEAD_VAR in full \
             and np.isfinite(full[LEAD_VAR]["span"][0]):
         dT = full[LEAD_VAR]
         # robust scale: the 5th..95th percentile of the whole series of the area (a few extreme months would
@@ -1177,7 +1211,7 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
             x = float(np.clip((ok.mean() - lo_) / ((hi_ - lo_) or 1), 0, 1)) if len(ok) else 0.5
             return 60.0 + 70.0 * x if gkey == "realistic" else base_bpm * (0.75 + 0.5 * x)
         fpb_t = float(frames_per_bar or hint or dT["meta"].get("frames_per_bar", 1.0))
-        temp_tempo = dict(bar_bpm=bar_bpm, scale=1.0)
+        temp_tempo = dict(bar_bpm=bar_bpm, scale=1.0, source="temperature")
         if bars_wanted is not None:        # as many bars as fit in duration_s at THEIR tempo
             win0 = _time_window(dT["times"], start, end, None)
             i0, i1 = (0, len(dT["mean"])) if win0 is None else (win0.start, win0.stop)
@@ -1214,7 +1248,21 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
     sl = scale_notes(key_pc, scale)
     rng = np.random.default_rng(seed)
     bar_tempi = None
-    if temp_tempo is not None and LEAD_VAR in series:   # one tempo per bar, from the temperature of the bar
+    bar_times_ = lambda b, v=ref_var: [] if series[v]["times"] is None else \
+        series[v]["times"][int(round(b * fpb)):max(int(round((b + 1) * fpb)), int(round(b * fpb)) + 1)]  # noqa: E731
+    bar_u = None
+    if temp_tempo is not None and temp_tempo["source"] == "co2":   # 0..1 per bar: the global CO2 of its dates
+        bar_u = np.array([urg.urgency_of_times(bar_times_(b)) for b in range(n_bars)], dtype=float)
+        bar_u = np.where(np.isfinite(bar_u), bar_u, np.nanmean(bar_u) if np.isfinite(bar_u).any() else 0.5)
+        bar_ppm = []
+        for b in range(n_bars):
+            ys = [urg.year_of(t) for t in bar_times_(b)]
+            ys = [y for y in ys if np.isfinite(y)]
+            bar_ppm.append(float(np.mean([urg.co2_ppm(y) for y in ys])) if ys else float("nan"))
+    if temp_tempo is not None and temp_tempo["source"] == "co2":
+        bar_tempi = [round(temp_tempo["bar_bpm_times"](bar_times_(b)) * temp_tempo["scale"], 3) for b in range(n_bars)]
+        bpm = round(base_bpm * temp_tempo["scale"], 3) if gkey != "realistic" else round(float(np.median(bar_tempi)), 3)
+    elif temp_tempo is not None and LEAD_VAR in series:   # one tempo per bar, from the temperature of the bar
         mT = series[LEAD_VAR]["mean"]
         bar_tempi = [round(temp_tempo["bar_bpm"](mT[int(round(b * fpb)):max(int(round((b + 1) * fpb)),
                                                                           int(round(b * fpb)) + 1)])
@@ -1322,8 +1370,9 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
         import soundscape
         for p in parts:
             label = p["cfg"]["name"].split(" - ")[0]
-            sound = "Ticking clock (faster when warmer)" if (p["var"] == LEAD_VAR and temperature_sound == "clock") \
-                else soundscape.SOUND_NAMES.get(p["var"], "(silent)")
+            heart_t = p["var"] == LEAD_VAR and bar_u is None      # the temperature is the pulse (tempo_source temperature)
+            sound = ("Ticking clock (faster when warmer)" if temperature_sound == "clock" else soundscape.HEART_NAME) \
+                if heart_t else soundscape.SOUND_NAMES.get(p["var"], "(silent)")
             p["cfg"] = dict(p["cfg"], name=f"{label} - {sound}")
 
     # ---- climax: the most anomalous bar
@@ -1467,7 +1516,13 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
                  for b, h in enumerate(chords)],
         # eras mode: [{key, name, start_bar, bars, start_s, time}], the musical era of each stretch of the piece
         "genre": gkey,
-        "tempo_from_temperature": bar_tempi is not None,
+        "tempo_from_temperature": bar_tempi is not None and temp_tempo["source"] == "temperature",
+        "tempo_source": None if bar_tempi is None else temp_tempo["source"],
+        # tempo from the CO2: the global CO2 and the urgency (0..1, the tempo / heartbeat) of each bar
+        "co2": None if bar_u is None else {
+            "co2_ppm_per_bar": [None if not np.isfinite(x) else round(x, 1) for x in bar_ppm],
+            "urgency_per_bar": [round(float(u_), 3) for u_ in bar_u],
+            "co2_record": "Law Dome ice cores (to 1958) + Mauna Loa NOAA/Scripps (1959-2024); 2025-2026 estimated"},
         "tempo_range": [min(t for _, t in tmap), max(t for _, t in tmap)],
         "eras": None if not (eras and era_segments) else [
             {**sg, "start_s": round(b2s(intro_beats + sg["start_bar"] * bpb), 3), "time": bar_time(sg["start_bar"])}
@@ -1526,7 +1581,8 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
             layers = [dict(var=p["var"], role=p["cfg"]["role"], norm=series[p["var"]]["norm"],
                            pres=series[p["var"]]["pres"], gate=p["cfg"]["gate"]) for p in parts]
             x, sr = soundscape.render(layers, [b2s(b) for b in range(total_beats + 1)], b2s(total_beats),
-                                      temperature_sound=temperature_sound)
+                                      temperature_sound=temperature_sound,
+                                      urgency=None if bar_u is None else np.repeat(bar_u, bpb))
         else:
             sf2 = render_audio.ensure_soundfont(render_audio.DEFAULT_SF2)
             x, sr = render_audio.render(paths["midi"], sf2, reverb=reverb, engine=audio_engine)
@@ -1591,9 +1647,11 @@ def main():
     ap.add_argument("--no-markers", action="store_true", help="data style: no anomaly triangle/woodblock")
     ap.add_argument("--genre", default="orchestra", help="orchestra (default), ragtime, swing, rocknroll, funk, synthpop, "
                                                           "house, trap, or realistic (recordings of rain, fire, thunder ...)")
-    ap.add_argument("--fixed-tempo", action="store_true", help="the temperature does not change the tempo")
+    ap.add_argument("--fixed-tempo", action="store_true", help="one fixed tempo (no CO2 / temperature tempo)")
     ap.add_argument("--temperature-sound", default="heartbeat", choices=["heartbeat", "clock"],
                     help="realistic mode: the temperature as a heartbeat (default) or a ticking clock")
+    ap.add_argument("--tempo-source", choices=["co2", "temperature"], default="co2",
+                    help="what sets each bar's tempo: the global CO2 (default; faster with the years) or the temperature")
     ap.add_argument("--eras", action="store_true", help="fun: music through the ages, each bar in the style of its date "
                                                         "(Romantic orchestra < 1910 ... modern pop / trap >= 2010)")
     ap.add_argument("--engine", choices=["auto", "vsco", "sf2"], default="auto",
@@ -1624,7 +1682,7 @@ def main():
                 seed=a.seed, out_dir=a.out, name=a.name, preview=a.preview, render=a.render,
                 reverb=a.reverb, audio_format="mp3" if a.mp3 else "wav", verbose=True,
                 style=a.style, quantize=a.quantize, markers=not a.no_markers, audio_engine=a.engine, eras=a.eras,
-                genre=a.genre, tempo_from_temperature=not a.fixed_tempo, temperature_sound=a.temperature_sound)
+                genre=a.genre, tempo_from_temperature=not a.fixed_tempo, temperature_sound=a.temperature_sound, tempo_source=a.tempo_source)
     except ComposeError as e:
         sys.exit(f"error: {e}")
 

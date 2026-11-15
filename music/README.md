@@ -121,7 +121,7 @@ the genre (`"Rain - Tenor sax"`).
 
 **`realistic`** (`music/soundscape.py`): no instruments, the sound of each phenomenon, mixed from real recordings:
 rain (+ a downpour layer when it pours), snowy wind, campfire (+ fireplace and a low roar for big fires), real
-thunderclaps (claps per beat = lightning activity), a heartbeat for the temperature (one lub-dub per beat: the tempo follows the temperature, 60 bpm when cold to 130 bpm when hot, louder when hot; synthesised), city traffic for CO₂, the 50 Hz hum
+thunderclaps (claps per beat = lightning activity), a heartbeat (one lub-dub per beat at the CO₂'s tempo, see below; synthesised) and a heat drone for the temperature, city traffic for CO₂, the 50 Hz hum
 of street lamps for night lights (synthesised). Levels measured per layer (about −27 dBFS for the temperature bed,
 −18 to −25 when a phenomenon is strong). The recordings (CC0 / public domain / CC BY, ~30 MB) are downloaded once
 from GitHub at pinned commits: `python music/soundscape.py --download` (credits: `soundfonts/README.md`).
@@ -134,7 +134,21 @@ O=simulation/output; python music/orchestra.py $O/real_temperature_1880_2025_ $O
     $O/real_snow_2000_2026_ $O/real_fires_2002_2026_ --zone switzerland --start 2017-01 --end 2018-12 --genre rocknroll --render --mp3
 ```
 
-**The temperature sets the tempo** (every genre, data style, default; `--fixed-tempo` / `"tempo_from_temperature": false` to turn it off): each bar's tempo = the genre's tempo x (0.75 + 0.5 t), t = the bar's mean temperature on the 5th..95th percentile of the whole series of the area (robust: a few extreme months do not squeeze the others into the middle), so the same temperature is the same tempo in every piece. In `realistic`, the heartbeat goes from 60 to 130 bpm. The MIDI has a tempo change on each bar; `score.tempo_map` and `score.tempo_range` give them. With `duration_s`, the number of bars is chosen with these tempos and the whole map is nudged to last exactly `duration_s`: 30 s covers 11 bars of 2023 against 9 of 1900 in Switzerland (orchestra), 16 against 10 worldwide (realistic: the heart beats at about 127 bpm in 2023, 64–90 in 1900).
+**The temperature sets the tempo** (`--tempo-source temperature`, every genre, data style; `--fixed-tempo` / `"tempo_from_temperature": false` for one fixed tempo): each bar's tempo = the genre's tempo x (0.75 + 0.5 t), t = the bar's mean temperature on the 5th..95th percentile of the whole series of the area (robust: a few extreme months do not squeeze the others into the middle), so the same temperature is the same tempo in every piece. In `realistic`, the heartbeat goes from 60 to 130 bpm. The MIDI has a tempo change on each bar; `score.tempo_map` and `score.tempo_range` give them. With `duration_s`, the number of bars is chosen with these tempos and the whole map is nudged to last exactly `duration_s`: 30 s covers 11 bars of 2023 against 9 of 1900 in Switzerland (orchestra), 16 against 10 worldwide (realistic: the heart beats at about 127 bpm in 2023, 64–90 in 1900).
+
+**The CO₂ sets the tempo** (default, `--tempo-source co2`, `"tempo_source": "co2"`; `music/urgency.py`): the goal is to
+hear the harm of climate change, so each bar is played at the tempo of the **global CO₂** of its dates. CO₂ almost
+never goes down, so the music only speeds up with the years (the temperature comes back down in cool years). The
+record: Law Dome ice cores to 1958, Mauna Loa (NOAA / Scripps) 1959–2024, 2025–2026 estimated from the measured
+May-to-May rises; the same curve for every zone (CO₂ mixes evenly in the air; the team's CO₂ maps have no trend,
+see the data concerns). u = (ppm − 290) / (430 − 290): 1880 → 0, 2000 → 0.57, 2024 → 0.96. Tempo: the genre's
+bpm × (0.8 + 0.45u). In `realistic` the soundscape builds up too:
+- the heartbeat plays at the CO₂'s tempo whatever the variables, 60 + 75u bpm (60 in 1880, about 132 today), and
+  turns irregular above 400 ppm: skipped beats and premature extra beats, up to about one in four;
+- the temperature becomes a low heat drone whose detuned tones beat faster and, when hot, clash with a semitone;
+- the whole soundscape gets louder with the CO₂.
+`score.tempo_source` and `score.co2` (`co2_ppm_per_bar`, `urgency_per_bar`). `--tempo-source temperature` gives
+the tempo of the temperature, below.
 
 ## 6. Music through the ages (fun mode, `--eras`)
 `compose(..., eras=True)` (API: `"eras": true`) plays each bar in the style of its **date**, so a long timeline goes from a Romantic orchestra in 1880 to trap in 2026:

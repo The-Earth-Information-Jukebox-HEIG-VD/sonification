@@ -271,6 +271,13 @@ All fields are optional. The smallest request is `{}` (global zone, default data
 
 ```
 
+### New in v2.13 (the CO2 sets the tempo)
+- by default the tempo of each bar now follows the **global CO2** of its dates instead of the temperature, in every genre: the genre's bpm x (0.8 + 0.45 u), u = (ppm - 290) / (430 - 290), so x0.8 in 1880 and about x1.23 today; the music speeds up with the years and never slows down, as CO2 almost never goes down. Record: Law Dome ice cores to 1958, Mauna Loa (NOAA / Scripps) 1959-2024, 2025-2026 estimated from the measured May-to-May rises (`music/urgency.py`). The same curve for every area (CO2 mixes evenly).
+- `realistic`: the heartbeat plays at the CO2's tempo whatever the datasets (60 bpm in 1880 to about 132 today), and turns irregular above 400 ppm (skipped and premature beats); the temperature becomes a low heat drone that trembles faster and clashes with a semitone when warmer; the whole soundscape gets louder with the CO2.
+- new `tempo_source` in `POST /api/compose`: `co2` (default) or `temperature` (the v2.9 behaviour). `"tempo_from_temperature": false` still gives one fixed tempo (the name is kept for compatibility).
+- `score.tempo_source` (`co2`, `temperature` or null) and `score.co2`: `co2_ppm_per_bar`, `urgency_per_bar` (0..1). `score.tempo_from_temperature` is true only with `tempo_source: temperature`.
+- 30 s chunks now cover about 8 months in 1880 and 12 to 13 today: keep using `next_time_period`. Vinyl mode is unchanged.
+
 ### New in v2.12 (the same month, year after year)
 - optional `"step": "year"` in `POST /api/sonify`, `/api/zones/zone-data` and `/api/compose`: one bar per YEAR, always the month of `time_period` (`2020-11` plays November 2020, November 2021, ...). `next_time_period` is that month in the next year to play. Monthly data only (`400` otherwise; not in vinyl mode).
 - the pitch scale is that month's range over the years, so a warmer November is a higher note than a colder one without the seasons swamping the difference. The temperature still sets the tempo, on the same Novembers.
