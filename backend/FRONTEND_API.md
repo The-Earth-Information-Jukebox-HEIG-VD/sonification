@@ -1,6 +1,6 @@
 # The API the frontend uses
 
-Four calls, no required options. (API v2.6: section 4, vinyl mode, is new.) Optional extras of section 2 (API v2.7–2.9): a musical `genre` (with `GET /api/genres` for the menu), music through the ages (`eras`), and the temperature that sets the tempo.
+Four calls, no required options. (API v2.6: section 4, vinyl mode, is new.) Optional extras of section 2 (API v2.7–2.10): a musical `genre` (with `GET /api/genres` for the menu), music through the ages (`eras`), and the temperature that sets the tempo.
 
 - Base URL: the backend, e.g. `http://localhost:8000` (behind the webapp's nginx: the same origin, `/api/...`).
 - Everything is JSON. Errors have a `detail` message.
@@ -58,7 +58,9 @@ Two spellings of the same call. Use either.
   "next_time_period": "2015-11",
   "audio_data": "<base64 of an MP3 file>",
   "values": {"temperature": 1.42, "night_lights": 0.031},
-  "point_count": 2
+  "point_count": 2,
+  "duration_s": 30.0,
+  "bar_starts_s": [0.0, 2.774, 6.006, 8.918, 11.885, 14.966, 17.964, 20.6, 23.237, 26.658]
 }
 ```
 A dataset the server has no data for is left out of the piece (no error, as long as one remains): `dataset_ids` in the answer says which ones were combined. `values` has an entry for each dataset that has data at `time_period`.
@@ -78,6 +80,8 @@ Response: `zone_id`, `dataset_id`, `time_period`, `next_time_period`, `audio_dat
 | `audio_data` | 30 seconds of music as a base64 MP3. `decodeAudioData` in `sonificationApi.ts` plays it as is |
 | `next_time_period` | send it as the next `time_period` to continue. `null` when the data ends |
 | `value` / `values` | the mean of each dataset over the points at `time_period`, in the units of `/api/instruments` |
+| `duration_s` | the exact length of the audio in seconds (30, v2.10) |
+| `bar_starts_s` | start second of each bar of the chunk, in order (v2.10): `bar_starts_s[0]` is `0` and the list is increasing; bar `i` lasts until `bar_starts_s[i+1]` (the last one until `duration_s`). One bar = one month, so `bar_starts_s.length` is the number of months from `time_period` to `next_time_period` (monthly data; with daily data one bar is several days). Use it to time what the listener hears (which month is playing) instead of assuming 3 s per month |
 | `point_count` | the number of points received (with `mask`: the number of 0.1° cells it selects) |
 
 ### Optional: a musical genre (`"genre": "rocknroll"`)
@@ -142,7 +146,7 @@ The data still decides every pitch and loudness; the drums hit harder in hot yea
 chunk can cross a boundary, e.g. 1905-1914). Without `"eras": true` nothing changes, and these fields are absent.
 
 ### What to expect
-- **The temperature sets the tempo**: each bar (one month) is faster when it is hotter (from 0.75x to 1.25x the genre's tempo; a heartbeat of 60 to 130 bpm in `realistic`), on a scale of the whole series of the area, so the same temperature is the same tempo in every chunk. A chunk is still 30 seconds, so **30 seconds is about 8 to 13 months** (10 at an average temperature): a hot period goes by faster. The next period after `2015-01` is about `2015-11`, not `2015-02`: always use `next_time_period`, do not add one month yourself.
+- **The temperature sets the tempo**: each bar (one month) is faster when it is hotter (from 0.75x to 1.25x the genre's tempo; a heartbeat of 60 to 130 bpm in `realistic`), on a scale of the whole series of the area, so the same temperature is the same tempo in every chunk. A chunk is still 30 seconds, so **30 seconds is about 8 to 13 months** (10 at an average temperature): a hot period goes by faster. The next period after `2015-01` is about `2015-11`, not `2015-02`: always use `next_time_period`, do not add one month yourself. Month `i` of the chunk starts at `bar_starts_s[i]` seconds (the bars are not 3 s long): follow the clock with `bar_starts_s` and `duration_s` (v2.10). Example, 2015-01 at an average temperature: `[0, 2.77, 6.01, 8.92, ...]` (10 months); in rock'n'roll the same chunk has 21 bars of about 1.4 s.
 - **`time_period` in the answer is where the music really starts.** It differs from the request only when you ask for a date before the first data.
 - **Several datasets**: each instrument plays where its own data exists and is silent elsewhere (temperature and precipitation from 1999: the violins come in in June 2000).
 - **Yearly data** (`night_lights`): the value is the year's. The synth pad starts clearly each January, when the value changes, then fades slowly over the year to a softer background note.
@@ -221,6 +225,7 @@ const path = Array.from({ length: 40 }, (_, i) => ({ lat: -0.5, lng: i * 9 }));
 - `path`: the points the needle crosses, in order. Whole bars: a multiple of `points_per_bar`, at most 20 bars (60 s) and 80 points. 30 s = 10 bars = 40 points at 4 per bar. Points closer than about 2° add nothing: the maps are 1° (temperature 2°).
 - `radius_deg` (default 1.5, from 0.1 to 10): how wide the needle reads. Each point is the mean over a disc of that radius. Wide = smooth music, narrow = detailed and jumpy. With points 5–10° apart, 2–3° reads more of the ground in between.
 - `dataset_ids`: as for zone-data; omitted = every dataset. `zone_id` optional, echoed back.
+- `genre` (optional, v2.10): the same genres as zone-data (`orchestra` default, `ragtime`, `swing`, `rocknroll`, `funk`, `synthpop`, `house`, `trap`, `realistic`; aliases `jazz`, `rock`, ...; `GET /api/genres`). Example: `{"time_period": "2018-07", "points_per_bar": 4, "genre": "funk", "path": ["..."]}`; the answer then has `"genre": "funk"`; `400` for an unknown genre. **The tempo stays fixed in vinyl mode**: bars are always 3 s whatever the genre (the genre's own tempo and the temperature-driven tempo are not used), so `duration_s`, `bar_seconds` and `stop_seconds` do not change and consecutive stretches of the same genre still join. Send the same genre for every stretch of a groove.
 
 ```json
 {

@@ -271,6 +271,10 @@ All fields are optional. The smallest request is `{}` (global zone, default data
 
 ```
 
+### New in v2.10 (chunk timing, genre in vinyl mode)
+- `POST /api/zones/zone-data` answers with `duration_s` (the exact length of the audio) and `bar_starts_s` (the start second of each bar, from `score.bars[i].start_s`; the first is 0, there is no intro in the data style; one bar = one month for monthly data, `frames_per_bar` frames otherwise). Its length is the number of months to `next_time_period`. The temperature-driven tempo makes bars of different lengths, so the frontend should time the chunk with it instead of assuming 3 s per month.
+- `POST /api/zones/groove` takes an optional `genre` (aliases accepted, `400` if unknown, `realistic` included) and echoes it when sent. The tempo stays the fixed 3 s bar (explicit `bpm`; no temperature tempo with `series_in`). The genre is part of the cache key; `GROOVE_VERSION` is 3.
+
 ### New in v2.9 (the temperature sets the tempo)
 - data style, every genre, by default: each bar's tempo follows the temperature of the bar (x0.75 cold .. x1.25 hot around the genre's tempo, on the 5th..95th percentile of the area's whole series); in `realistic` the temperature is a **heartbeat** of 60 to 130 bpm (it replaces the birdsong). `"tempo_from_temperature": false` gives one fixed tempo (`POST /api/compose`).
 - `duration_s` is still exact: the number of bars is chosen with the bar tempos, so a 30 s chunk covers about 8 to 13 months (10 at an average temperature). Always use `next_time_period`.
