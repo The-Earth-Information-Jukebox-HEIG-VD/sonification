@@ -304,7 +304,7 @@ print(json.dumps({
 
 
 def test_the_webapp_endpoint_and_ids(tmp_path):
-    """POST /api/zones/zone-data, as webapp/src/services/zoneApi.ts calls it: dataset_ids in, dataset_ids + values out."""
+    """POST /api/zones/zone-data, as webapp/src/services/sonificationApi.ts calls it: dataset_ids in, dataset_ids + values out."""
     raw, cache = tmp_path / "data", tmp_path / "cache"
     for name in ("precipitation_rain_2000_2026", "precipitation_snow_2000_2026", "nightlights_2012_2023"):
         (raw / name).mkdir(parents=True)
