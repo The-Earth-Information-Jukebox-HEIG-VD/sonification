@@ -72,7 +72,7 @@ One dataset per variable, one bar per month in all of them. **A request can mix 
 - **Yearly data.** Night lights come as one map per year. The converter repeats each map for the 12 months of its year, so the dataset has the same monthly time axis as the others and lines up with them by date; nothing is invented between two years. In the music the harp holds its note for a year and steps in January.
 - **Same value, same note.** `/api/sonify` plays a long series chunk after chunk, so each instrument's pitch is scaled on the whole series of the selected area (`pitch_range: "series"`), not on the 30 seconds of one chunk. Without it a yearly value, constant inside a chunk, would always be the same middle note.
 - A folder the preparation step does not know is ignored.
-- The image serves only the frontend's two calls and `/api/health` (`JUKEBOX_FULL_API=0`). `-e JUKEBOX_FULL_API=1` also serves the engine's endpoints, e.g. to explore them at `/docs`.
+- The image serves only the frontend's calls (`backend/FRONTEND_API.md`) and `/api/health` (`JUKEBOX_FULL_API=0`). `-e JUKEBOX_FULL_API=1` also serves the engine's endpoints, e.g. to explore them at `/docs`.
 - `JUKEBOX_MERGE_DATASETS=0` goes back to one dataset per request (the default outside Docker).
 - `JUKEBOX_PREPARE=0` skips the conversion. `PORT` changes the port (default 8000).
 - The GitHub workflow publishes the image on a version tag: `git tag v0.1.0 && git push origin v0.1.0`.

@@ -989,7 +989,7 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
             preview=False, render=False, reverb=0.28, audio_format="wav", verbose=False,
             intro=True, tension=True, climax=True, humanize=0.5,
             style="data", quantize="scale", markers=True, marker_threshold=1.5, audio_engine="auto",
-            cells=None, cells_grid=None, duration_s=None, pitch_range="window"):
+            cells=None, cells_grid=None, duration_s=None, pitch_range="window", series_in=None):
     """Data maps -> score. Writes MIDI (+ stems, JSON, optional PNG/audio) to out_dir and returns
     a dict with the score document, file paths and stats.
 
@@ -1007,7 +1007,12 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
 
     duration_s: play this many seconds of data starting at `start` (instead of giving `end`).
     As many bars as fit at about `bpm` are taken, then the tempo is nudged so that they last
-    exactly duration_s. Near the end of the dataset, where fewer frames are left, the piece is shorter."""
+    exactly duration_s. Near the end of the dataset, where fewer frames are left, the piece is shorter.
+
+    series_in: {variable: (values, meta)} played instead of reading `maps` (vinyl mode, music/groove.py:
+    one value per PLACE along the needle's path, at one date). The pitch scale of each variable is then its
+    dataset's global range (meta vmin / vmax), so the same value is the same note wherever the needle is.
+    `bbox` should be given (the box around the path); start / end / duration_s do not apply."""
     log = print if verbose else (lambda *a, **k: None)
     if style not in ("data", "musical"):
         raise ComposeError("style must be 'data' or 'musical'")
@@ -1049,8 +1054,16 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
 
     # ---- zone mean per frame for every variable
     series, full = {}, {}
-    files = collect_maps(maps if isinstance(maps, (list, tuple)) else [maps])
-    if not files:
+    if series_in is not None:              # vinyl mode: values along a path in space, given by the caller
+        for var, (vals, meta) in series_in.items():
+            if var not in orch or (only and var not in only) or var in excl:
+                continue
+            m = np.asarray(vals, dtype=np.float64)
+            lo, hi = meta.get("vmin"), meta.get("vmax")
+            span = (float(lo), float(hi)) if lo is not None and hi is not None and hi > lo else None
+            full[var] = dict(mean=m, z=np.zeros(len(m)), meta=meta, times=None, file=None, span=span)
+    files = [] if series_in is not None else collect_maps(maps if isinstance(maps, (list, tuple)) else [maps])
+    if series_in is None and not files:
         raise ComposeError("no map files found")
     for f in files:
         z, meta = load_map(str(f))
@@ -1078,6 +1091,8 @@ def compose(maps, zone="global", bbox=None, surface="all", start=None, end=None,
             raise ComposeError(f"two maps for '{var}' ({full[var]['file']} and {Path(f).name}): give one per variable")
         full[var] = dict(mean=m, z=zsc, meta=meta, times=times, file=Path(f).name)
     for d in full.values():                # lowest and highest value of the WHOLE series of this area
+        if d.get("span") is not None:      # vinyl mode: the dataset's global range, set above
+            continue
         ok = np.isfinite(d["mean"])
         d["span"] = (float(d["mean"][ok].min()), float(d["mean"][ok].max())) if ok.any() else (np.nan, np.nan)
     hint = _align_by_date(full)            # maps from different datasets -> one time axis (no-op for one dataset)

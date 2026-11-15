@@ -1,6 +1,6 @@
 # Sonification API: the engine, for development
 
-> **Frontend developers: read [`FRONTEND_API.md`](FRONTEND_API.md).** It has the two calls you need. This file documents the engine's own endpoints, which the deployed backend does not serve (`JUKEBOX_FULL_API=0` in the Docker image).
+> **Frontend developers: read [`FRONTEND_API.md`](FRONTEND_API.md).** It has the calls you need. This file documents the engine's own endpoints, which the deployed backend does not serve (`JUKEBOX_FULL_API=0` in the Docker image).
 
 Backend for the Earth Information Jukebox. The frontend sends **what to listen to** (dataset, zone or selected cells, time window, a few musical options). The backend composes the orchestra and returns **the score as JSON plus URLs** to the MIDI, the per-instrument stems and the rendered audio.
 
@@ -42,8 +42,8 @@ uvicorn backend.app:app --reload --port 8000
 | GET | `/api/compositions/{id}` | fetch an earlier composition again (`?include_notes=false` for a light payload) |
 | GET | `/api/files/{id}/{file}` | download a generated file (MIDI, MP3/WAV, JSON, PNG); the compose response gives you the full URLs |
 
-## The frontend's two calls
-`GET /api/instruments`, `POST /api/sonify` / `POST /api/zones/zone-data` and `POST /api/zones/series` (chart data) are described in **[`FRONTEND_API.md`](FRONTEND_API.md)**, one page, no options. They are all the deployed backend serves.
+## The frontend's calls
+`GET /api/instruments`, `POST /api/sonify` / `POST /api/zones/zone-data`, `POST /api/zones/series` (chart data) and `POST /api/zones/groove` (vinyl mode) are described in **[`FRONTEND_API.md`](FRONTEND_API.md)**, one page, no options. They are all the deployed backend serves.
 
 For development, `POST /api/sonify/debug` takes the same request plus the engine's knobs (`duration_s`, `audio_format`, `embed_audio`, and `options` = any field of `/api/compose` below) and answers with every detail: `values` and `units` of each instrument, `time_end`, `duration_s`, `audio_url`, `composition_id`, `source_dataset(s)`, `real_data`, `anomaly`, `cell_count`.
 

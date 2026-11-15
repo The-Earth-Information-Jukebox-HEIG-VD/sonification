@@ -14,7 +14,7 @@ Config (environment variables):
   JUKEBOX_CACHE_DIR   where compositions are written / cached        default: backend/cache
   JUKEBOX_BUILT_DIR   datasets built by backend/prepare_data.py      default: <cache>/_datasets
   JUKEBOX_MERGE_DATASETS  1 = each variable from its own dataset, lined up by date   default: 0
-  JUKEBOX_FULL_API    0 = only the frontend's two calls (+ health) are served      default: 1
+  JUKEBOX_FULL_API    0 = only the frontend's calls (FRONTEND_PATHS) are served  default: 1
   JUKEBOX_CHUNK_SECONDS   length of one piece returned by POST /api/sonify         default: 30
   JUKEBOX_CORS        comma-separated allowed origins                default: *
 """
@@ -42,6 +42,7 @@ from pydantic import AliasChoices, BaseModel, Field, ValidationError, field_vali
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "music"))
+import groove  # noqa: E402
 import orchestra  # noqa: E402
 from zone_to_midi import ZONES  # noqa: E402
 
@@ -50,7 +51,7 @@ CACHE_DIR = Path(os.environ.get("JUKEBOX_CACHE_DIR", ROOT / "backend" / "cache")
 # datasets converted from the team's raw folders by backend/prepare_data.py (the data folder can be read-only)
 BUILT_DIR = Path(os.environ.get("JUKEBOX_BUILT_DIR") or CACHE_DIR / "_datasets")
 CORS = [o.strip() for o in os.environ.get("JUKEBOX_CORS", "*").split(",")]
-API_VERSION = "2.5"
+API_VERSION = "2.6"
 COMPOSITION_ID = re.compile(r"[0-9a-f]{16}")         # what cache_key() produces
 # 1 = a request that names no dataset takes EACH variable from its own best dataset and the composer lines
 # them up by date (temperature since 1880 with precipitation joining in 2000 ...). The Docker image sets it:
@@ -60,7 +61,8 @@ MERGE_DATASETS = os.environ.get("JUKEBOX_MERGE_DATASETS", "0").lower() not in ("
 # The Docker image sets it. 1 (default) = also the engine's own endpoints, for development and tests.
 FULL_API = os.environ.get("JUKEBOX_FULL_API", "1").lower() not in ("", "0", "false", "no")
 CHUNK_SECONDS = float(os.environ.get("JUKEBOX_CHUNK_SECONDS", "30"))     # length of one piece of POST /api/sonify
-FRONTEND_PATHS = ("/api/health", "/api/instruments", "/api/sonify", "/api/zones/zone-data", "/api/zones/series")
+FRONTEND_PATHS = ("/api/health", "/api/instruments", "/api/sonify", "/api/zones/zone-data", "/api/zones/series",
+                  "/api/zones/groove")
 
 app = FastAPI(title="Earth Information Jukebox: sonification API", version=API_VERSION,
               description="Turns NASA EIC intensity maps into an orchestra (MIDI + audio).")
@@ -666,6 +668,95 @@ def zone_data(req: ZoneDataRequest, request: Request):
     return {"zone_id": chunk["zone_id"], "dataset_ids": [sent_id.get(v, SHORT_IDS.get(v, v)) for v in chunk["values"]],
             "time_period": chunk["time_period"], "next_time_period": chunk["next_time_period"],
             "audio_data": chunk["audio_data"], "values": values, "point_count": chunk["point_count"]}
+
+
+# ----------------------------------------------------------------------------
+# Frontend contract, vinyl mode: the needle moves through SPACE at one fixed date.
+# The frontend sends the stretch of path the needle crosses next; one place = one bar.
+# ----------------------------------------------------------------------------
+GROOVE_BAR_SECONDS = 3.0       # one place per bar, the same bar as the normal mode (30 s = 10 bars): pieces join
+GROOVE_SNAP_DEG = 0.5          # places are snapped to this grid, so listeners crossing the same places share the cache
+GROOVE_MAX_STOPS = 20          # places of one request (20 x 3 s = 60 s of music)
+GROOVE_VERSION = 1             # bump when the groove music changes, so cached pieces are not reused
+
+
+def _snap(v: float) -> float:
+    return round(round(v / GROOVE_SNAP_DEG) * GROOVE_SNAP_DEG, 4)
+
+
+class GrooveRequest(BaseModel):
+    zone_id: Optional[str] = Field(None, description="the frontend's id of this stretch or record; echoed back")
+    dataset_ids: Optional[list[str]] = Field(None, description="dataset ids of GET /api/instruments (default: all)")
+    time_period: str = Field(description="the fixed date: '2018-07' (that month) or '2018' (the mean of the year)")
+    path: list[SonifyPoint] = Field(min_length=1, max_length=GROOVE_MAX_STOPS,
+                                    description="the places the needle crosses, in order: [{lat, lng}, ...]; "
+                                    f"one place = one bar of {GROOVE_BAR_SECONDS:g} s")
+    radius_deg: float = Field(1.5, ge=0.1, le=10, description="how wide the needle reads: each place is the mean "
+                              "over a disc of this radius (degrees)")
+
+    @field_validator("time_period")
+    @classmethod
+    def _period(cls, v):
+        m = re.fullmatch(r"\s*(\d{4})(?:-(\d{1,2}))?\s*", str(v))
+        if not m or (m.group(2) and not 1 <= int(m.group(2)) <= 12):
+            raise ValueError("time_period must be a month 'YYYY-MM' or a year 'YYYY'")
+        return m.group(1) + (f"-{int(m.group(2)):02d}" if m.group(2) else "")
+
+
+@app.post("/api/zones/groove")
+def zone_groove(req: GrooveRequest, request: Request):
+    """Vinyl mode: the music of a path in space at one date. Every place of `path` is one bar; the values are
+    read on the needle (a disc of `radius_deg` around the place) and played on each dataset's GLOBAL scale, so
+    a value is the same note wherever the needle is. Pieces have a fixed bar length (`bar_seconds`) and key,
+    so consecutive stretches of the same groove join without a jump."""
+    sent = list(req.dataset_ids or [])
+    variable_of, kept = known_dataset_ids(sent)
+    variables = [variable_of[d] for d in kept] or None
+    sources = merged_sources(variables, req.time_period)
+    if not sources:
+        raise HTTPException(404, "no dataset on the server")
+    ds = scan_datasets()
+    files = {v: ds[k]["file_of"][v] for v, k in sources.items()}
+    stops = [(max(-90.0, min(90.0, _snap(p.lat))), _snap((p.lng + 180) % 360 - 180)) for p in req.path]
+    radius = round(req.radius_deg, 2)
+    stamp = sorted((v, f.name, f.stat().st_mtime) for v, f in files.items())
+    key = hashlib.sha1(json.dumps({"groove": GROOVE_VERSION, "period": req.time_period, "stops": stops,
+                                   "radius": radius, "_data": stamp, "_v": API_VERSION}).encode()).hexdigest()[:16]
+    folder = CACHE_DIR / key
+    with lock_for(key):
+        audio = next((folder / f"score.{e}" for e in ("mp3", "wav") if (folder / f"score.{e}").exists()), None)
+        if not (audio and (folder / "score.json").exists() and (folder / "groove.json").exists()):
+            series = groove.groove_series(files, req.time_period, stops, radius)
+            if not series:
+                raise HTTPException(400, f"no data at {req.time_period} along this path "
+                                         f"for {sent or 'any dataset'} (see GET /api/instruments for the dates)")
+            folder.mkdir(parents=True, exist_ok=True)
+            lats, lngs = [s[0] for s in stops], [s[1] for s in stops]
+            la0, la1 = max(-90.0, min(lats) - radius), min(90.0, max(lats) + radius)
+            bbox = (la0, la1 if la1 > la0 else la0 + 1e-3, max(-180.0, min(lngs) - radius), min(180.0, max(lngs) + radius))
+            try:
+                orchestra.compose([], bbox=bbox, series_in=series, pitch_range="series", frames_per_bar=1,
+                                  bpm=60.0 * 4 / GROOVE_BAR_SECONDS, out_dir=folder, name="score",
+                                  render=True, audio_format="mp3", audio_engine="auto")
+            except orchestra.ComposeError as e:
+                raise HTTPException(400, str(e))
+            (folder / "score_preview.wav").unlink(missing_ok=True)
+            (folder / "groove.json").write_text(json.dumps(
+                {v: [None if not np.isfinite(x) else round(float(x), 4) for x in vals] for v, (vals, _) in series.items()}))
+            audio = next((folder / f"score.{e}" for e in ("mp3", "wav") if (folder / f"score.{e}").exists()), None)
+        if audio is None:
+            raise HTTPException(503, "audio rendering is not available on the server (see GET /api/health)")
+        score = json.loads((folder / "score.json").read_text())
+        values = json.loads((folder / "groove.json").read_text())
+    sent_id = {variable_of[d]: d for d in reversed(kept)}                 # variable -> the id the webapp used
+    id_of = lambda v: sent_id.get(v, SHORT_IDS.get(v, v))  # noqa: E731
+    playing = [v for v in score["instruments"] if v in values]
+    return {"zone_id": req.zone_id, "time_period": req.time_period,
+            "dataset_ids": [id_of(v) for v in playing],
+            "audio_data": base64.b64encode(audio.read_bytes()).decode("ascii"),
+            "duration_s": score["duration_s"], "bar_seconds": GROOVE_BAR_SECONDS, "radius_deg": radius,
+            "stops": [{"lat": la, "lng": lo, "values": {id_of(v): values[v][i] for v in playing}}
+                      for i, (la, lo) in enumerate(stops)]}
 
 
 # ----------------------------------------------------------------------------

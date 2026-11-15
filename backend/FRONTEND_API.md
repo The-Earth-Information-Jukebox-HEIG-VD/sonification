@@ -1,6 +1,6 @@
 # The API the frontend uses
 
-Three calls. No options. (API v2.5)
+Four calls. No options. (API v2.6: section 4, vinyl mode, is new)
 
 - Base URL: the backend, e.g. `http://localhost:8000` (behind the webapp's nginx: the same origin, `/api/...`).
 - Everything is JSON. Errors have a `detail` message.
@@ -136,5 +136,46 @@ No audio: one value per month for each requested dataset, the same area-weighted
 - `missing`: the requested ids the server has no data for. They are left out of `series`, not an error, as long as one id is known.
 - **Errors**: `400` when none of the ids is known (same message as zone-data); `422` malformed request (no points and no mask, more than 20 000 points, an invalid `mask`, no `dataset_ids`, another `aggregation`).
 - The first request for an area takes up to about a second (the 1880 → today temperature); the same area again is immediate (cached).
+
+## 4. `POST /api/zones/groove`: vinyl mode, the needle moves through space (API v2.6)
+
+The date stays fixed; what moves is the place. The frontend sends the stretch of path the needle crosses next, the backend answers with its music: **one place = one bar of 3 s**.
+
+```json
+{
+  "zone_id": "record-1",
+  "dataset_ids": ["temperature", "precipitation", "lightning", "fires"],
+  "time_period": "2018-07",
+  "path": [{"lat": -5.0, "lng": 0.0}, {"lat": -5.0, "lng": 2.5}, {"lat": -5.0, "lng": 5.0}, {"lat": -5.0, "lng": 7.5}],
+  "radius_deg": 1.5
+}
+```
+- `time_period`: the fixed date, a month `"2018-07"` or a whole year `"2018"` (the mean of its months: calmer, and covers more datasets).
+- `path`: 1 to 20 places, in the order the needle crosses them. 4 places = 12 s of music, 10 places = 30 s.
+- `radius_deg` (default 1.5, from 0.1 to 10): how wide the needle reads. Each place is the mean over a disc of that radius. Wide = smooth music, narrow = detailed and jumpy.
+- `dataset_ids`: as for zone-data; omitted = every dataset. `zone_id` optional, echoed back.
+
+```json
+{
+  "zone_id": "record-1",
+  "time_period": "2018-07",
+  "dataset_ids": ["temperature", "precipitation", "lightning", "fires"],
+  "audio_data": "<base64 mp3>",
+  "duration_s": 12.0,
+  "bar_seconds": 3.0,
+  "radius_deg": 1.5,
+  "stops": [
+    {"lat": -5.0, "lng": 0.0, "values": {"temperature": 0.41, "precipitation": 2.1, "lightning": 0.0, "fires": null}},
+    {"lat": -5.0, "lng": 2.5, "values": {"temperature": 0.63, "precipitation": 3.8, "lightning": 0.02, "fires": null}}
+  ]
+}
+```
+- `stops[i]` plays from `i × bar_seconds` to `(i + 1) × bar_seconds`: show the needle and its values in step with the music. `null` = no data under the needle there (ocean for fires, beyond 55° for lightning); that instrument is silent for that bar.
+- Places are **snapped to a 0.5° grid** (`stops` gives the snapped positions). Two listeners crossing the same places get the same piece from the cache, in about 0.1 s.
+- **One scale for the whole planet**: a value is the same note wherever the needle is (the dataset's global range), so hot and cold places really sound different. In zone-data, the scale is the zone's own history.
+- Every piece has the same tempo and key: consecutive stretches of a groove join without a jump. Send the next stretch **about 5 s before** the current piece ends: a new stretch takes a few seconds to compose the first time.
+- `dataset_ids` in the answer: the datasets that have data along the path at that date. A dataset whose dates do not cover `time_period` (lightning before 2017) is left out.
+- **Errors**: `400` unknown `dataset_ids`, or no data at that date along the whole path; `422` malformed request (`time_period` not `YYYY-MM` / `YYYY`, no `path` or more than 20 places, `radius_deg` out of range).
+- The first request at a new date reads each map once (a few seconds); the next requests at that date only read the needle.
 
 Nothing else is served by the deployed backend. The engine's own endpoints and options (`backend/API.md`) exist for development only (`JUKEBOX_FULL_API=1`).
